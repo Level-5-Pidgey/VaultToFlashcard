@@ -1,81 +1,97 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Text.RegularExpressions;
 
-public class CategoryAnalyzer
+namespace VaultToFlashcard;
+
+public partial class CategoryAnalyzer
 {
-    private readonly Dictionary<string, int> _categoryFrequencies = new();
-    private readonly Dictionary<HashSet<string>, int> _subsetFrequencies = new(HashSet<string>.CreateSetComparer());
-    private readonly List<HashSet<string>> _noteCategorySets = new();
+    private readonly Dictionary<string, int> CategoryFrequencies = new();
+    private readonly Dictionary<HashSet<string>, int> SubsetFrequencies = new(HashSet<string>.CreateSetComparer());
+    private readonly List<HashSet<string>> NoteCategorySets = [];
+
     private const int MinNotesForDeck = 3;
 
-    public void Analyze(List<string> categories)
+    public void Analyze(List<string>? categories)
     {
-        if (categories == null) return;
+        if (categories == null)
+        {
+            return;
+        }
+        
         var categorySet = new HashSet<string>(categories.Select(CleanCategory).Where(c => !string.IsNullOrEmpty(c)));
         if (!categorySet.Any()) return;
 
-        _noteCategorySets.Add(categorySet);
+        NoteCategorySets.Add(categorySet);
     }
 
     public void FinalizeAnalysis()
     {
-        // 1. Calculate single category frequencies
-        foreach (var categorySet in _noteCategorySets)
+        foreach (var categorySet in NoteCategorySets)
         {
             foreach (var category in categorySet)
             {
-                _categoryFrequencies.TryGetValue(category, out var count);
-                _categoryFrequencies[category] = count + 1;
+                CategoryFrequencies.TryGetValue(category, out var count);
+                CategoryFrequencies[category] = count + 1;
             }
         }
 
-        // 2. Calculate frequencies of all subsets
-        foreach (var noteSet in _noteCategorySets)
+        foreach (var noteSet in NoteCategorySets)
         {
             var subsets = GetPowerSet(noteSet);
             foreach (var subset in subsets)
             {
-                if (subset.Any())
+                if (!subset.Any())
                 {
-                    _subsetFrequencies.TryGetValue(subset, out var count);
-                    _subsetFrequencies[subset] = count + 1;
+                    continue;
                 }
+
+                SubsetFrequencies.TryGetValue(subset, out var count);
+                SubsetFrequencies[subset] = count + 1;
             }
         }
     }
 
-    public (string DeckName, List<string> Tags) ResolveDeckName(List<string> categories)
+    public (string DeckName, IReadOnlyCollection<string> Tags) ResolveDeckName(List<string>? categories)
     {
-        if (categories == null) return ("Default", new List<string>());
-        var cleanedCategories = categories.Select(CleanCategory).Where(c => !string.IsNullOrEmpty(c)).ToHashSet();
+        if (categories == null)
+        {
+            return ("Default", []);
+        }
+        
+        var cleanedCategories = categories
+            .Select(CleanCategory)
+            .Where(c => !string.IsNullOrEmpty(c))
+            .ToHashSet();
+
         if (!cleanedCategories.Any())
         {
-            return ("Default", new List<string>());
+            return ("Default", []);
         }
 
-        var candidateSubsets = GetPowerSet(cleanedCategories).Where(s => s.Any()).ToList();
+        var candidateSubsets = GetPowerSet(cleanedCategories)
+            .Where(s => s.Any());
 
         var validPaths = new List<HashSet<string>>();
         foreach (var path in candidateSubsets)
         {
-            _subsetFrequencies.TryGetValue(path, out var supportCount);
+            SubsetFrequencies.TryGetValue(path, out var supportCount);
             if (supportCount < MinNotesForDeck)
             {
                 continue;
             }
 
             // Check if path is hierarchical based on individual frequencies
-            var orderedPath = path.OrderByDescending(c => _categoryFrequencies.GetValueOrDefault(c, 0)).ToList();
-            bool isHierarchical = true;
-            for (int i = 0; i < orderedPath.Count - 1; i++)
+            var orderedPath = path.OrderByDescending(c => CategoryFrequencies.GetValueOrDefault(c, 0)).ToList();
+            var isHierarchical = true;
+            for (var i = 0; i < orderedPath.Count - 1; i++)
             {
-                if (_categoryFrequencies.GetValueOrDefault(orderedPath[i], 0) == _categoryFrequencies.GetValueOrDefault(orderedPath[i+1], 0))
+                if (CategoryFrequencies.GetValueOrDefault(orderedPath[i], 0) !=
+                    CategoryFrequencies.GetValueOrDefault(orderedPath[i + 1], 0))
                 {
-                    isHierarchical = false;
-                    break;
+                    continue;
                 }
+
+                isHierarchical = false;
+                break;
             }
 
             if (isHierarchical)
@@ -86,54 +102,71 @@ public class CategoryAnalyzer
 
         if (!validPaths.Any())
         {
-            return ("Default", cleanedCategories.ToList());
+            return ("Default", cleanedCategories);
         }
 
         // Select the best path
+        
+        /*
+         * Resolve the best path by:
+         * 1) The highest supporting count
+         * 2) The longest path
+         * 3) Lexographical order
+         */
         var bestPath = validPaths
-            .OrderByDescending(p => _subsetFrequencies[p]) // Rule 1: Highest Support Count
-            .ThenByDescending(p => p.Count) // Rule 2: Longest Path
-            .ThenBy(p => string.Join("::", p.OrderBy(c => c))) // Rule 3: Lexicographical Order
+            .OrderByDescending(p => SubsetFrequencies[p])
+            .ThenByDescending(p => p.Count)
+            .ThenBy(p => string.Join("::", p.OrderBy(c => c)))
             .First();
 
         var deckPath = bestPath
-            .OrderByDescending(c => _categoryFrequencies.GetValueOrDefault(c, 0))
+            .OrderByDescending(c => CategoryFrequencies.GetValueOrDefault(c, 0))
             .ToList();
 
         var deckName = string.Join("::", deckPath);
-        var tags = cleanedCategories.Except(bestPath).ToList();
+        var tags = cleanedCategories
+            .Except(bestPath)
+            .ToArray();
 
         return (deckName, tags);
     }
 
-    private IEnumerable<HashSet<string>> GetPowerSet(HashSet<string> set)
+    private static IEnumerable<HashSet<string>> GetPowerSet(HashSet<string> set)
     {
         var list = set.ToList();
-        int setSize = list.Count;
-        int powerSetSize = 1 << setSize;
+        var setSize = list.Count;
+        var powerSetSize = 1 << setSize;
 
-        for (int counter = 0; counter < powerSetSize; counter++)
+        for (var counter = 0; counter < powerSetSize; counter++)
         {
             var subset = new HashSet<string>();
-            for (int i = 0; i < setSize; i++)
+            for (var i = 0; i < setSize; i++)
             {
                 if ((counter & (1 << i)) > 0)
                 {
                     subset.Add(list[i]);
                 }
             }
+
             yield return subset;
         }
     }
 
-    private string CleanCategory(string category)
+    private static string CleanCategory(string category)
     {
-        if (string.IsNullOrEmpty(category)) return string.Empty;
-        var match = Regex.Match(category, @"\[\[(?:.*[|/])?(.*?)\]\]");
-        if (match.Success)
+        if (string.IsNullOrEmpty(category))
         {
-            return match.Groups[1].Value.Trim();
+            return string.Empty;
         }
-        return category.Trim();
+
+        var match = WikiLinkRegex().Match(category);
+
+        return match.Success ? 
+            match.Groups[1].Value.Trim() : 
+            category.Trim();
     }
+
+    // TODO move this to a common location as it's used in the other file as well
+    [GeneratedRegex(@"\[\[(?:.*[|/])?(.*?)\]\]")]
+    private static partial Regex WikiLinkRegex();
 }

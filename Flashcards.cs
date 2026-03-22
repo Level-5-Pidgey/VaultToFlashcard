@@ -11,7 +11,7 @@ public enum FlashcardType
     Cloze = 2,
 }
 
-public abstract class FlashcardTransport
+public class FlashcardTransport
 {
     [JsonPropertyName("cardType")]
     public FlashcardType Type { get; set; } = FlashcardType.Unknown;
@@ -29,6 +29,8 @@ public abstract class FlashcardTransport
 public abstract class Flashcard(FlashcardType type)
 {
     public FlashcardType Type { get; set; } = type;
+    public string SourceNote { get; set; } = "";
+    public string SourceSection { get; set; } = "";
 }
 
 public class BasicFlashcard() : Flashcard(FlashcardType.Basic)

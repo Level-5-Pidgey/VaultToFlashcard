@@ -23,14 +23,13 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
     private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
     private const string CacheFileName = ".obsidian-anki-cache.json";
-    private const int ApiRateLimit = 5;
     
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().Build();
     private static readonly FixedWindowRateLimiter GeminiRateLimiter = new(new FixedWindowRateLimiterOptions
     {
-        PermitLimit = ApiRateLimit,
-        Window = TimeSpan.FromSeconds(60),
+        PermitLimit = 1,
+        Window = TimeSpan.FromSeconds(15),
         AutoReplenishment = true
     });
     private static readonly SemaphoreSlim FileProcessingSemaphore = new(10);
@@ -74,6 +73,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             var json = await File.ReadAllTextAsync(cachePath);
             Cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
         }
+
+        
+        await ankiClient.EnsureFieldsExist("Basic", new[] { "SourceNote", "SourceSection" });
+        await ankiClient.EnsureFieldsExist("Cloze", new[] { "SourceNote", "SourceSection" });
 
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
             .Where(p => !p.Contains(CacheFileName))
@@ -210,14 +213,15 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                     await ankiClient.DeleteNotesAsync(cachedEntry.NoteIds);
                 }
 
+                var relativePath = Path.GetRelativePath(vaultPath, filePath);
                 IReadOnlyCollection<Flashcard> flashcards;
                 switch (aiMode)
                 {
                     case "cli":
-                        flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, Path.GetFileName(filePath), header, model);
+                        flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, relativePath, header, model);
                         break;
                     case "api":
-                        flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, Path.GetFileName(filePath), header, model, apiKey);
+                        flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, header, model, apiKey);
                         break;
                     default:
                         Console.WriteLine($"Unknown ai-mode: {aiMode}");
@@ -313,7 +317,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
     
     private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsApiAsync(string content, Dictionary<object, object> frontMatter, string fileName, string header, string model, string apiKey)
     {
-        await GeminiRateLimiter.AcquireAsync();
+        using var lease = await GeminiRateLimiter.AcquireAsync();
         try
         {
             var promptMessages = GetPromptMessages(content, frontMatter, fileName, header);
@@ -326,7 +330,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             using var loggerFactory = LoggerFactory.Create(builder =>
             {
                 builder.AddConsole();
-                builder.SetMinimumLevel(LogLevel.Trace);
+                builder.SetMinimumLevel(LogLevel.Warning);
             });
 
             var client = new ChatClientBuilder(gemini)
@@ -350,12 +354,18 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             try
             {
                 var transport = JsonSerializer.Deserialize<FlashcardTransport[]>(response.Text) ?? [];
-                return transport.Select(x => (Flashcard)(x.Type switch
+                return transport.Select(x =>
                     {
-                        FlashcardType.Basic => new BasicFlashcard(x),
-                        FlashcardType.Cloze => new ClozeFlashcard(x),
-                        _ => throw new InvalidOperationException(),
-                    }))
+                        Flashcard card = x.Type switch
+                        {
+                            FlashcardType.Basic => new BasicFlashcard(x),
+                            FlashcardType.Cloze => new ClozeFlashcard(x),
+                            _ => throw new InvalidOperationException(),
+                        };
+                        card.SourceNote = fileName; // which is now the relative path
+                        card.SourceSection = header;
+                        return card;
+                    })
                     .ToArray();
             }
             catch(JsonException ex)
@@ -367,7 +377,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         }
         finally
         {
-            // The permit is automatically released in FixedWindowRateLimiter
+            lease.Dispose();
         }
     }
 
@@ -431,7 +441,13 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
 
         try
         {
-            return JsonSerializer.Deserialize<List<Flashcard>>(jsonOutput, jsonOptions) ?? new List<Flashcard>();
+            var flashcards = JsonSerializer.Deserialize<List<Flashcard>>(jsonOutput, jsonOptions) ?? new List<Flashcard>();
+            foreach (var card in flashcards)
+            {
+                card.SourceNote = fileName;
+                card.SourceSection = header;
+            }
+            return flashcards;
         }
         catch(JsonException ex)
         {

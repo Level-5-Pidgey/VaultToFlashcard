@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 
 namespace VaultToFlashcard;
@@ -8,7 +9,7 @@ public partial class CategoryAnalyzer
     private readonly Dictionary<HashSet<string>, int> SubsetFrequencies = new(HashSet<string>.CreateSetComparer());
     private readonly List<HashSet<string>> NoteCategorySets = [];
 
-    private const int MinNotesForDeck = 3;
+    private const int MinNotesForDeck = 5;
 
     public void Analyze(List<string>? categories)
     {
@@ -113,11 +114,21 @@ public partial class CategoryAnalyzer
          * 2) The longest path
          * 3) Lexographical order
          */
-        var bestPath = validPaths
+        var sortedBest = validPaths
             .OrderByDescending(p => SubsetFrequencies[p])
             .ThenByDescending(p => p.Count)
             .ThenBy(p => string.Join("::", p.OrderBy(c => c)))
-            .First();
+            .ToImmutableArray();
+
+        ICollection<string> bestPath;
+        if (sortedBest.Length > 1 && sortedBest.First().Count == 1)
+        {
+            bestPath = sortedBest.ElementAt(1);
+        }
+        else
+        {
+            bestPath = sortedBest.First();
+        }
 
         var deckPath = bestPath
             .OrderByDescending(c => CategoryFrequencies.GetValueOrDefault(c, 0))
@@ -164,9 +175,7 @@ public partial class CategoryAnalyzer
         return match.Success ? 
             match.Groups[1].Value.Trim() : 
             category.Trim();
-    }
-
-    // TODO move this to a common location as it's used in the other file as well
+        }    // TODO move this to a common location as it's used in the other files as well
     [GeneratedRegex(@"\[\[(?:.*[|/])?(.*?)\]\]")]
     private static partial Regex WikiLinkRegex();
 }

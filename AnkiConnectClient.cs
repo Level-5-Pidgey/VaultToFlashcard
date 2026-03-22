@@ -14,6 +14,7 @@ public class AnkiConnectClient
     public AnkiConnectClient()
     {
         HttpClient = new HttpClient();
+        HttpClient.Timeout = TimeSpan.FromSeconds(300);
         // AnkiConnect's server can't handle the 'Expect' header
         HttpClient.DefaultRequestHeaders.ExpectContinue = false;
     }
@@ -42,7 +43,7 @@ public class AnkiConnectClient
     {
         var notes = new List<AnkiNote>();
         var allTags = new[] { "obsidian-auto-generated" }
-            .Concat(tags)
+            .Concat(tags.Select(tag => tag.Replace(' ', '_')))
             .ToHashSet();
         
         foreach (var card in flashcards)
@@ -50,10 +51,10 @@ public class AnkiConnectClient
             switch (card)
             {
                 case BasicFlashcard basic:
-                    notes.Add(new AnkiNote(deckName, "Basic", new { basic.Front, basic.Back }, allTags));
+                    notes.Add(new AnkiNote(deckName, "Basic", new { basic.Front, basic.Back, SourceNote = card.SourceNote, SourceSection = card.SourceSection }, allTags));
                     break;
                 case ClozeFlashcard cloze:
-                    notes.Add(new AnkiNote(deckName, "Cloze", new { cloze.Text }, allTags));
+                    notes.Add(new AnkiNote(deckName, "Cloze", new { cloze.Text, SourceNote = card.SourceNote, SourceSection = card.SourceSection }, allTags));
                     break;
             }
         }
@@ -91,6 +92,41 @@ public class AnkiConnectClient
                 .ToArray()
             : [];
     }
+    
+    public async Task EnsureFieldsExist(string modelName, IEnumerable<string> requiredFields)
+    {
+        var modelFieldNames = await GetModelFieldNamesAsync(modelName);
+        var missingFields = requiredFields.Except(modelFieldNames).ToList();
+
+        foreach (var field in missingFields)
+        {
+            Console.WriteLine($"Field '{field}' not found in model '{modelName}'. Attempting to add it...");
+            try
+            {
+                var action = new AnkiAction("modelFieldAdd", new { modelName, fieldName = field });
+                await PostAsync(action);
+                Console.WriteLine($"Successfully added field '{field}' to model '{modelName}'.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to add field '{field}' to model '{modelName}'. Please add it manually via Anki's 'Tools > Manage Note Types' menu.");
+                Console.WriteLine($"Error: {ex.Message}");
+                throw new Exception($"Failed to automatically add required field '{field}' to Anki model '{modelName}'. Please add it manually and restart the process.", ex);
+            }
+        }
+    }
+
+    public async Task<List<string>> GetModelFieldNamesAsync(string modelName)
+    {
+        var action = new AnkiAction("modelFieldNames", new { modelName });
+        var result = await PostAsync(action);
+        if (result.ValueKind == JsonValueKind.Array)
+        {
+            return result.EnumerateArray().Select(e => e.GetString() ?? "").ToList();
+        }
+        return new List<string>();
+    }
+    
     
     private async Task<JsonElement> PostAsync(AnkiAction action)
     {

@@ -56,7 +56,7 @@ public class Program
                 return;
             }
             var processor = new VaultProcessor(ankiClient);
-            await processor.ProcessVault(vaultPath.FullName, aiMode, apiKey, model);
+            await processor.ProcessVault(vaultPath.FullName, aiMode, apiKey ?? string.Empty, model);
 
         }, vaultOption, aiModeOption, modelOption);
 

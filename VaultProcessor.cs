@@ -511,9 +511,12 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 break;
             case FencedCodeBlock fencedCodeBlock:
                 sb.AppendLine("```" + (fencedCodeBlock.Info ?? string.Empty));
-                foreach (var line in fencedCodeBlock.Lines.Lines)
+                if (fencedCodeBlock.Lines.Lines != null)
                 {
-                    sb.AppendLine(line.ToString());
+                    foreach (var line in fencedCodeBlock.Lines.Lines)
+                    {
+                        sb.AppendLine(line.ToString());
+                    }
                 }
                 sb.AppendLine("```");
                 break;
@@ -541,7 +544,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             case HtmlBlock:
                 
                 break;
-            case ContainerBlock container when !(container is ParagraphBlock || container is HeadingBlock):
+            case ContainerBlock container:
                 foreach (var child in container) ExtractTextRecursive(child, sb);
                 break;
             case ContainerInline containerInline when !(containerInline is EmphasisInline):

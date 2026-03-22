@@ -17,6 +17,7 @@ using System.Text.RegularExpressions;
 using GeminiDotnet;
 using GeminiDotnet.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using VaultToFlashcard;
 
 public class Program
 {
@@ -78,7 +79,8 @@ public class Program
 
 public record CacheEntry(
     [property: JsonPropertyName("contentHash")] string ContentHash,
-    [property: JsonPropertyName("noteIds")] List<long> NoteIds
+    [property: JsonPropertyName("noteIds")] List<long> NoteIds,
+    [property: JsonPropertyName("deckName")] string DeckName
 );
 
 public class VaultProcessor
@@ -232,7 +234,6 @@ public class VaultProcessor
             var (deckName, tags) = ResolveDeckName(filePath, vaultPath, frontMatter);
             await _ankiClient.CreateDeckAsync(deckName);
 
-            return;
             var allSectionKeys = new HashSet<string>();
 
             foreach (var (header, content) in contentChunks)
@@ -248,6 +249,15 @@ public class VaultProcessor
 
                 _cache.TryGetValue(cacheKey, out var cachedEntry);
 
+                if (cachedEntry != null && cachedEntry.DeckName != deckName && cachedEntry.ContentHash == contentHash)
+                {
+                    Console.WriteLine($"  - MOVING: '{header}' from deck '{cachedEntry.DeckName}' to '{deckName}'");
+                    await _ankiClient.ChangeDeckAsync(cachedEntry.NoteIds, deckName);
+                    _cache[cacheKey] = cachedEntry with { DeckName = deckName };
+                    cachedEntry.NoteIds.ForEach(allValidNoteIds.Add);
+                    continue;
+                }
+                
                 if (cachedEntry != null && cachedEntry.ContentHash == contentHash)
                 {
                     Console.WriteLine($"  - SKIPPING: '{header}' (unchanged)");
@@ -281,7 +291,7 @@ public class VaultProcessor
                 {
                     var newNoteIds = await _ankiClient.AddNotesAsync(flashcards, deckName, tags);
                     Console.WriteLine($"    > Synced {newNoteIds.Count} flashcards to Anki deck '{deckName}'.");
-                    _cache[cacheKey] = new CacheEntry(contentHash, newNoteIds);
+                    _cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
                     newNoteIds.ForEach(allValidNoteIds.Add);
                 }
                 else if (_cache.ContainsKey(cacheKey))
@@ -668,6 +678,13 @@ public class AnkiConnectClient
     {
         if (!noteIds.Any()) return;
         var action = new AnkiAction("deleteNotes", new { notes = noteIds });
+        await PostAsync(action);
+    }
+
+    public async Task ChangeDeckAsync(List<long> noteIds, string deck)
+    {
+        if (!noteIds.Any()) return;
+        var action = new AnkiAction("changeDeck", new { notes = noteIds, deck = deck });
         await PostAsync(action);
     }
     

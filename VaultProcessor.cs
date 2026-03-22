@@ -279,24 +279,24 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         // Set initial context and system persona
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, $$$"""
-                                    You are a versatile Educator and Anki Instructional Designer. 
-                                    Your goal is to extract atomic, high-quality knowledge from sections of notes that remain clear and "guessable".
+            new(ChatRole.System, """
+                                 You are a versatile Educator and Anki Instructional Designer. 
+                                 Your goal is to extract atomic, high-quality knowledge from sections of notes that remain clear and "guessable".
 
-                                    UNIVERSAL RULES:
-                                    1. IDENTITY ANCHOR: Every card must be 100% self-contained. Never use "it," "this," or "the service." Use the specific name from the Note Title or Categories to provide context.
-                                    2. ATOMICITY: Each card must test exactly ONE discrete fact. If a sentence has three facts, create three separate cards.
-                                    3. NO "HIDDEN CONTEXT": Imagine the user sees this card 6 months from now mixed with 5,000 other cards. Ensure there is enough "clue" text in the Question/Cloze to point to the correct answer.
+                                 UNIVERSAL RULES:
+                                 1. IDENTITY ANCHOR: Every card must be 100% self-contained. Never use "it," "this," or "the service." Use the specific name from the Note Title or Categories to provide context.
+                                 2. ATOMICITY: Each card must test exactly ONE discrete fact. If a sentence has three facts, create three separate cards.
+                                 3. NO "HIDDEN CONTEXT": Imagine the user sees this card 6 months from now mixed with 5,000 other cards. Ensure there is enough "clue" text in the Question/Cloze to point to the correct answer.
 
-                                    DOMAIN-SPECIFIC BEHAVIOR:
-                                    - TECHNICAL/CONCEPTS: Focus on "WHY" and "WHEN" (trade-offs and use cases).
-                                    - LANGUAGES: Focus on usage in context. For vocab, include a short example sentence.
-                                    - INTERVIEW PREP: Focus on the "KEY TAKEAWAY" or a specific "Action" from a behavioral response.
+                                 DOMAIN-SPECIFIC BEHAVIOR:
+                                 - TECHNICAL/CONCEPTS: Focus on "WHY" and "WHEN" (trade-offs and use cases).
+                                 - LANGUAGES: Focus on usage in context. For vocab, include a short example sentence.
+                                 - INTERVIEW PREP: Focus on the "KEY TAKEAWAY" or a specific "Action" from a behavioral response.
 
-                                    CLOZE RULES:
-                                    - Minimum of 2 clozes per card: {{c1::answer::hint}}. Hints are optional -- only use them if necessary to provide context for the card.
-                                    - Never cloze-delete the only word that identifies the topic. If you must cloze the topic, provide a mandatory hint (e.g., {{c1::Bonjour::French Greeting}}).
-                                    """),
+                                 CLOZE RULES:
+                                 - Minimum of 2 clozes per card: {{c1::answer::hint}}. Hints are optional -- only use them if necessary to provide context for the card.
+                                 - Never cloze-delete the only word that identifies the topic. If you must cloze the topic, provide a mandatory hint (e.g., {{c1::Bonjour::French Greeting}}).
+                                 """),
 
             new(ChatRole.User, $"Context: This note has the following categories: '{noteCategories}' and is titled '{fileName}'."),
         };

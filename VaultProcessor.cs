@@ -284,7 +284,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         var containsList = Regex.IsMatch(content, @"^\s*-\s+", RegexOptions.Multiline);
 
         var systemPrompt = new StringBuilder("""
-                                             You are an Anki Instructional Designer. Create atomic, self-contained cards.
+                                             You are an Anki Instructional Designer. Create self-contained cards using either Cloze or Basic format, with HTML tags for styling.
                                              1. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
                                              2. ATOMICITY: One card = One discrete fact.
                                              3. CLOZES: Use {{c1::answer::hint}}. Never cloze-delete the primary topic word, and only use hints if required for context.

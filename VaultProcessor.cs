@@ -280,35 +280,30 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, """
-                                 You are a versatile Educator and Anki Instructional Designer. 
-                                 Your goal is to extract atomic, high-quality knowledge from sections of notes that remain clear and "guessable".
-
-                                 UNIVERSAL RULES:
-                                 1. IDENTITY ANCHOR: Every card must be 100% self-contained. Never use "it," "this," or "the service." Use the specific name from the Note Title or Categories to provide context.
-                                 2. ATOMICITY: Each card must test exactly ONE discrete fact. If a sentence has three facts, create three separate cards.
-                                 3. NO "HIDDEN CONTEXT": Imagine the user sees this card 6 months from now mixed with 5,000 other cards. Ensure there is enough "clue" text in the Question/Cloze to point to the correct answer.
-
-                                 DOMAIN-SPECIFIC BEHAVIOR:
-                                 - TECHNICAL/CONCEPTS: Focus on "WHY" and "WHEN" (trade-offs and use cases).
-                                 - LANGUAGES: Focus on usage in context. For vocab, include a short example sentence.
-                                 - INTERVIEW PREP: Focus on the "KEY TAKEAWAY" or a specific "Action" from a behavioral response.
-
-                                 CLOZE RULES:
-                                 - Minimum of 2 clozes per card: {{c1::answer::hint}}. Hints are optional -- only use them if necessary to provide context for the card.
-                                 - Never cloze-delete the only word that identifies the topic. If you must cloze the topic, provide a mandatory hint (e.g., {{c1::Bonjour::French Greeting}}).
+                                 You are an Anki Instructional Designer. Create atomic, self-contained cards.
+                                 1. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
+                                 2. ATOMICITY: One card = One discrete fact.
+                                 3. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.
+                                 4. CLOZES: Use {{c1::answer::hint}}. Never cloze-delete the primary topic word, and only use hints if required for context.
                                  """),
 
-            new(ChatRole.User, $"Context: This note has the following categories: '{noteCategories}' and is titled '{fileName}'."),
+            new(ChatRole.User,
+                $"Context: This note has the following categories: '{noteCategories}' and is titled '{fileName}'."),
         };
 
         if (!string.Equals(Path.GetFileNameWithoutExtension(fileName), header, StringComparison.OrdinalIgnoreCase))
         {
-            messages.Add(new (ChatRole.User, $"Section Name: {header}"));
+            messages.Add(new(ChatRole.User, $"Section Name: {header}"));
         }
-        
+
         // Add example responses to help generate better results
-        messages.Add(new (ChatRole.Assistant, "Example Q&A card: [{\"front\": \"When should a Trie be used over a Hash Map?\", \"back\": \"When you need efficient prefix-based searching/auto-complete.\"}]"));
-        messages.Add(new (ChatRole.Assistant, "Example Cloze card: [{\"text\": \"{{c1::Canberra::city}} was founded in {{c2::1913::year}}\"}]"));
+        messages.Add(new(ChatRole.Assistant, """
+                                             Examples:
+                                             - Set: [{"text": "{{c1::Canberra::city}} was founded in {{c2::1913}}"}]
+                                             - Vocab: [{"text": "{{c1::Bonjour::French}} is used for {{c2::greeting someone in the morning}}."}]
+                                             - Q&A: [{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}]
+                                             - List: "text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"
+                                             """));
         
         // Add actual text extracted from document
         messages.Add(new (ChatRole.User, $@"Content to convert:\n{content}\n\nTask: Create atomic Anki flashcards from this content."));

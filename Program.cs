@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Markdig;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
@@ -75,14 +76,30 @@ public class Program
     }
 }
 
+public record CacheEntry(
+    [property: JsonPropertyName("contentHash")] string ContentHash,
+    [property: JsonPropertyName("noteIds")] List<long> NoteIds
+);
+
 public class VaultProcessor
 {
     private readonly AnkiConnectClient _ankiClient;
     private readonly CategoryAnalyzer _categoryAnalyzer = new();
-    private ConcurrentDictionary<string, string> _cache = new();
+    private ConcurrentDictionary<string, CacheEntry> _cache = new();
     private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
     private const string CacheFileName = ".obsidian-anki-cache.json";
     private static readonly MarkdownPipeline _pipeline = new MarkdownPipelineBuilder().Build();
+    
+    // Rate limiter for Gemini API: 5 requests per minute
+    private static readonly FixedWindowRateLimiter _geminiRateLimiter = new(new FixedWindowRateLimiterOptions
+    {
+        PermitLimit = 5,
+        Window = TimeSpan.FromSeconds(60),
+        AutoReplenishment = true
+    });
+
+    // Semaphore to control the number of files processed concurrently
+    private static readonly SemaphoreSlim _fileProcessingSemaphore = new(10);
 
     public VaultProcessor(AnkiConnectClient ankiClient)
     {
@@ -126,7 +143,7 @@ public class VaultProcessor
         {
             Console.WriteLine("Loading cache...");
             var json = await File.ReadAllTextAsync(cachePath);
-            _cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, string>>(json) ?? new();
+            _cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
         }
 
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
@@ -135,11 +152,27 @@ public class VaultProcessor
         
         await AnalyzeAllCategoriesAsync(markdownFiles);
 
+        var allValidNoteIds = new ConcurrentBag<long>();
+        var processingTasks = new List<Task>();
         foreach (var filePath in markdownFiles)
         {
-            await ProcessFileAsync(filePath, aiMode, apiKey, model, vaultPath);
+            await _fileProcessingSemaphore.WaitAsync();
+            processingTasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    await ProcessFileAsync(filePath, aiMode, apiKey, model, vaultPath, allValidNoteIds);
+                }
+                finally
+                {
+                    _fileProcessingSemaphore.Release();
+                }
+            }));
         }
+        await Task.WhenAll(processingTasks);
 
+        await CleanUpOrphanedNotesAsync(allValidNoteIds);
+        
         Console.WriteLine("Saving cache...");
         var newJson = JsonSerializer.Serialize(_cache, _jsonOptions);
         await File.WriteAllTextAsync(cachePath, newJson);
@@ -147,7 +180,26 @@ public class VaultProcessor
         Console.WriteLine("Vault processing complete.");
     }
 
-    private async Task ProcessFileAsync(string filePath, string aiMode, string apiKey, string model, string vaultPath)
+    private async Task CleanUpOrphanedNotesAsync(ConcurrentBag<long> validNoteIds)
+    {
+        Console.WriteLine("Cleaning up orphaned notes...");
+        var ankiNoteIds = await _ankiClient.FindAllTaggedNotesAsync();
+    
+        var validIdSet = new HashSet<long>(validNoteIds);
+        var orphanedIds = ankiNoteIds.Where(id => !validIdSet.Contains(id)).ToList();
+
+        if (orphanedIds.Any())
+        {
+            Console.WriteLine($"  > Found {orphanedIds.Count} orphaned notes to delete.");
+            await _ankiClient.DeleteNotesAsync(orphanedIds);
+        }
+        else
+        {
+            Console.WriteLine("  > No orphaned notes found.");
+        }
+    }
+
+    private async Task ProcessFileAsync(string filePath, string aiMode, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
     {
         try
         {
@@ -177,10 +229,11 @@ public class VaultProcessor
             Console.WriteLine($"Processing file: {filePath}");
             var contentChunks = ParseAndSanitize(markdownContent);
 
-            var deckName = ResolveDeckName(filePath, vaultPath, frontMatter);
+            var (deckName, tags) = ResolveDeckName(filePath, vaultPath, frontMatter);
             await _ankiClient.CreateDeckAsync(deckName);
 
             return;
+            var allSectionKeys = new HashSet<string>();
 
             foreach (var (header, content) in contentChunks)
             {
@@ -190,15 +243,25 @@ public class VaultProcessor
                 }
 
                 var cacheKey = $"{Path.GetRelativePath(vaultPath, filePath)}#{header}";
+                allSectionKeys.Add(cacheKey);
                 var contentHash = CalculateHash(content);
 
-                if (_cache.TryGetValue(cacheKey, out var cachedHash) && cachedHash == contentHash)
+                _cache.TryGetValue(cacheKey, out var cachedEntry);
+
+                if (cachedEntry != null && cachedEntry.ContentHash == contentHash)
                 {
                     Console.WriteLine($"  - SKIPPING: '{header}' (unchanged)");
+                    cachedEntry.NoteIds.ForEach(allValidNoteIds.Add);
                     continue;
                 }
 
                 Console.WriteLine($"  - PROCESSING: '{header}' (new or changed)");
+
+                if (cachedEntry != null)
+                {
+                    Console.WriteLine($"    > Deleting {cachedEntry.NoteIds.Count} old note(s).");
+                    await _ankiClient.DeleteNotesAsync(cachedEntry.NoteIds);
+                }
 
                 IReadOnlyCollection<Flashcard> flashcards;
                 switch (aiMode)
@@ -216,11 +279,15 @@ public class VaultProcessor
 
                 if (flashcards.Any())
                 {
-                    await _ankiClient.AddNotesAsync(flashcards, deckName);
-                    Console.WriteLine($"    > Synced {flashcards.Count} flashcards to Anki deck '{deckName}'.");
+                    var newNoteIds = await _ankiClient.AddNotesAsync(flashcards, deckName, tags);
+                    Console.WriteLine($"    > Synced {newNoteIds.Count} flashcards to Anki deck '{deckName}'.");
+                    _cache[cacheKey] = new CacheEntry(contentHash, newNoteIds);
+                    newNoteIds.ForEach(allValidNoteIds.Add);
                 }
-
-                _cache[cacheKey] = contentHash;
+                else if (_cache.ContainsKey(cacheKey))
+                {
+                    _cache.TryRemove(cacheKey, out _);
+                }
             }
         }
         catch (Exception ex)
@@ -233,7 +300,7 @@ public class VaultProcessor
         }
     }
 
-    private string ResolveDeckName(string filePath, string vaultPath, Dictionary<object, object> frontMatter)
+    private (string DeckName, List<string> Tags) ResolveDeckName(string filePath, string vaultPath, Dictionary<object, object> frontMatter)
     {
         if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
         {
@@ -244,7 +311,7 @@ public class VaultProcessor
             }
         }
 
-        return Path.GetFileNameWithoutExtension(filePath);
+        return (Path.GetFileNameWithoutExtension(filePath), new List<string>());
     }
     
     private IReadOnlyCollection<ChatMessage> GetPromptMessages(string content, Dictionary<object, object> frontMatter, string fileName, string header)
@@ -301,53 +368,61 @@ public class VaultProcessor
     
     private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsApiAsync(string content, Dictionary<object, object> frontMatter, string fileName, string header, string model, string apiKey)
     {
-        var promptMessages = GetPromptMessages(content, frontMatter, fileName, header);
-        var gemini = new GeminiChatClient(new GeminiClientOptions
-        {
-            ApiKey = apiKey,
-            ModelId = model,
-        });
-        
-        using var loggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder.AddConsole();
-            builder.SetMinimumLevel(LogLevel.Trace); // Important: 'Trace' is needed to see message content
-        });
-        
-        var client = new ChatClientBuilder(gemini)
-            .UseLogging(loggerFactory)
-            .Build();
-
-        var options = new ChatOptions
-        {
-            ResponseFormat = ChatResponseFormat.ForJsonSchema<FlashcardTransport[]>(),
-            Temperature = 0.15f,
-        };
-        
-        var response = await client.GetResponseAsync(promptMessages, options);
-
-        if (response.FinishReason != ChatFinishReason.Stop)
-        {
-            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {response.FinishReason}");
-            return Array.Empty<Flashcard>();
-        }
-        
+        await _geminiRateLimiter.AcquireAsync();
         try
         {
-            var transport = JsonSerializer.Deserialize<FlashcardTransport[]>(response.Text) ?? [];
-            return transport.Select(x => (Flashcard)(x.Type switch
+            var promptMessages = GetPromptMessages(content, frontMatter, fileName, header);
+            var gemini = new GeminiChatClient(new GeminiClientOptions
             {
-                FlashcardType.Basic => new BasicFlashcard(x),
-                FlashcardType.Cloze => new ClozeFlashcard(x),
-                _ => throw new InvalidOperationException(),
-            }))
-            .ToArray();
+                ApiKey = apiKey,
+                ModelId = model,
+            });
+
+            using var loggerFactory = LoggerFactory.Create(builder =>
+            {
+                builder.AddConsole();
+                builder.SetMinimumLevel(LogLevel.Trace); // Important: 'Trace' is needed to see message content
+            });
+
+            var client = new ChatClientBuilder(gemini)
+                .UseLogging(loggerFactory)
+                .Build();
+
+            var options = new ChatOptions
+            {
+                ResponseFormat = ChatResponseFormat.ForJsonSchema<FlashcardTransport[]>(),
+                Temperature = 0.15f,
+            };
+
+            var response = await client.GetResponseAsync(promptMessages, options);
+
+            if (response.FinishReason != ChatFinishReason.Stop)
+            {
+                Console.WriteLine($"Error deserializing JSON for chunk '{header}': {response.FinishReason}");
+                return Array.Empty<Flashcard>();
+            }
+
+            try
+            {
+                var transport = JsonSerializer.Deserialize<FlashcardTransport[]>(response.Text) ?? [];
+                return transport.Select(x => (Flashcard)(x.Type switch
+                {
+                    FlashcardType.Basic => new BasicFlashcard(x),
+                    FlashcardType.Cloze => new ClozeFlashcard(x),
+                    _ => throw new InvalidOperationException(),
+                }))
+                .ToArray();
+            }
+            catch(JsonException ex)
+            {
+                Console.WriteLine($"Error deserializing JSON for chunk '{header}': {ex.Message}");
+                Console.WriteLine($"-- Invalid JSON -- {response.Text} ------------------");
+                return new List<Flashcard>();
+            }
         }
-        catch(JsonException ex)
+        finally
         {
-            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {ex.Message}");
-            Console.WriteLine($"-- Invalid JSON -- {response.Text} ------------------");
-            return new List<Flashcard>();
+            // The permit is automatically released in FixedWindowRateLimiter
         }
     }
 
@@ -532,6 +607,9 @@ public class AnkiConnectClient
     private readonly HttpClient _httpClient;
     private const string AnkiConnectUrl = "http://127.0.0.1:8765";
 
+    // Concurrency limiter for AnkiConnect: 3 concurrent requests
+    private static readonly SemaphoreSlim _ankiConcurrencyLimiter = new(3, 3);
+
     public AnkiConnectClient()
     {
         _httpClient = new HttpClient();
@@ -559,68 +637,100 @@ public class AnkiConnectClient
         await PostAsync(action);
     }
 
-    public async Task AddNotesAsync(IReadOnlyCollection<Flashcard> flashcards, string deckName)
+    public async Task<List<long>> AddNotesAsync(IReadOnlyCollection<Flashcard> flashcards, string deckName, List<string> tags)
     {
         var notes = new List<AnkiNote>();
+        var allTags = new[] { "obsidian-auto-generated" }.Concat(tags).ToList();
         foreach (var card in flashcards)
         {
             switch (card)
             {
                 case BasicFlashcard basic:
-                    notes.Add(new AnkiNote(deckName, "Basic", new { Front = basic.Front, Back = basic.Back }));
+                    notes.Add(new AnkiNote(deckName, "Basic", new { Front = basic.Front, Back = basic.Back }, allTags));
                     break;
                 case ClozeFlashcard cloze:
-                    notes.Add(new AnkiNote(deckName, "Cloze", new { Text = cloze.Text }));
+                    notes.Add(new AnkiNote(deckName, "Cloze", new { Text = cloze.Text }, allTags));
                     break;
             }
         }
         var action = new AnkiAction("addNotes", new { notes });
+        var result = await PostAsync(action);
+
+        if (result.ValueKind == JsonValueKind.Array)
+        {
+            return result.EnumerateArray().Select(e => e.GetInt64()).ToList();
+        }
+
+        return new List<long>();
+    }
+
+    public async Task DeleteNotesAsync(List<long> noteIds)
+    {
+        if (!noteIds.Any()) return;
+        var action = new AnkiAction("deleteNotes", new { notes = noteIds });
         await PostAsync(action);
+    }
+    
+    public async Task<List<long>> FindAllTaggedNotesAsync()
+    {
+        var action = new AnkiAction("findNotes", new { query = "tag:obsidian-auto-generated" });
+        var result = await PostAsync(action);
+        return result.ValueKind == JsonValueKind.Array
+            ? result.EnumerateArray().Select(e => e.GetInt64()).ToList()
+            : new List<long>();
     }
     
     private async Task<JsonElement> PostAsync(AnkiAction action)
     {
-        var options = new JsonSerializerOptions
+        await _ankiConcurrencyLimiter.WaitAsync();
+        try
         {
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        };
+            var options = new JsonSerializerOptions
+            {
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            };
 
-        var jsonPayload = JsonSerializer.Serialize(action, options);
-        var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+            var jsonPayload = JsonSerializer.Serialize(action, options);
+            var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
-        var response = await _httpClient.PostAsync(AnkiConnectUrl, content);
+            var response = await _httpClient.PostAsync(AnkiConnectUrl, content);
 
-        if (!response.IsSuccessStatusCode)
-        {
-            var errorContent = await response.Content.ReadAsStringAsync();
-            throw new HttpRequestException($"AnkiConnect request failed with status code {response.StatusCode}: {errorContent}");
-        }
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                throw new HttpRequestException($"AnkiConnect request failed with status code {response.StatusCode}: {errorContent}");
+            }
 
-        var responseBody = await response.Content.ReadAsStringAsync();
+            var responseBody = await response.Content.ReadAsStringAsync();
 
-        if (string.IsNullOrWhiteSpace(responseBody) || responseBody.Trim() == "null")
-        {
+            if (string.IsNullOrWhiteSpace(responseBody) || responseBody.Trim() == "null")
+            {
+                return default;
+            }
+
+            using var jsonDoc = JsonDocument.Parse(responseBody);
+            var root = jsonDoc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("error", out var errorElement) && errorElement.ValueKind != JsonValueKind.Null)
+                {
+                    throw new Exception($"AnkiConnect error: {errorElement.GetString()}");
+                }
+
+                if (root.TryGetProperty("result", out var resultElement))
+                {
+                    return resultElement.Clone();
+                }
+            }
+            
             return default;
         }
-
-        using var jsonDoc = JsonDocument.Parse(responseBody);
-        var root = jsonDoc.RootElement;
-
-        if (root.ValueKind == JsonValueKind.Object)
+        finally
         {
-            if (root.TryGetProperty("error", out var errorElement) && errorElement.ValueKind != JsonValueKind.Null)
-            {
-                throw new Exception($"AnkiConnect error: {errorElement.GetString()}");
-            }
-
-            if (root.TryGetProperty("result", out var resultElement))
-            {
-                return resultElement.Clone();
-            }
+            _ankiConcurrencyLimiter.Release();
         }
-        
-        return default;
     }
 }
 
@@ -634,11 +744,8 @@ public record AnkiNote(
     [property: JsonPropertyName("deckName")] string DeckName,
     [property: JsonPropertyName("modelName")] string ModelName,
     [property: JsonPropertyName("fields")] object Fields,
-    [property: JsonPropertyName("tags")] string[]? Tags = null
-)
-{
-    public AnkiNote(string deckName, string modelName, object fields) : this(deckName, modelName, fields, new[] { "obsidian-auto-generated" }) {}
-}
+    [property: JsonPropertyName("tags")] List<string> Tags
+);
 
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

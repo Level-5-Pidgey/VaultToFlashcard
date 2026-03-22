@@ -23,6 +23,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
     private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
     private const string CacheFileName = ".obsidian-anki-cache.json";
+    private const string CardSourceFormat = "{0}#{1}";
     
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().Build();
@@ -75,8 +76,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         }
 
         
-        await ankiClient.EnsureFieldsExist("Basic", new[] { "SourceNote", "SourceSection" });
-        await ankiClient.EnsureFieldsExist("Cloze", new[] { "SourceNote", "SourceSection" });
+        await ankiClient.EnsureFieldsExist("Basic", new[] { "Source" });
+        await ankiClient.EnsureFieldsExist("Cloze", new[] { "Source" });
 
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
             .Where(p => !p.Contains(CacheFileName))
@@ -218,10 +219,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 switch (aiMode)
                 {
                     case "cli":
-                        flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, relativePath, header, model);
+                        flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model);
                         break;
                     case "api":
-                        flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, header, model, apiKey);
+                        flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
                         break;
                     default:
                         Console.WriteLine($"Unknown ai-mode: {aiMode}");
@@ -280,19 +281,33 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             noteCategories = string.Join(", ", tagList.Select(t => t.ToString()));
         }
 
-        // Set initial context and system persona
+        var containsList = Regex.IsMatch(content, @"^\s*-\s+", RegexOptions.Multiline);
+
+        var systemPrompt = new StringBuilder("""
+                                             You are an Anki Instructional Designer. Create atomic, self-contained cards.
+                                             1. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
+                                             2. ATOMICITY: One card = One discrete fact.
+                                             3. CLOZES: Use {{c1::answer::hint}}. Never cloze-delete the primary topic word, and only use hints if required for context.
+                                             """);
+
+        var assistantPrompt = new StringBuilder("""
+                                                Examples:
+                                                - Set: [{"text": "{{c1::Canberra::city}} was founded in {{c2::1913}}"}]
+                                                - Vocab: [{"text": "{{c1::Bonjour::French}} is used for {{c2::greeting someone in the morning}}."}]
+                                                - Q&A: [{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}]
+                                                """);
+
+        if (containsList)
+        {
+            systemPrompt.AppendLine(
+                "4. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
+            assistantPrompt.AppendLine("""- List: [{"text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"}]""");
+        }
+        
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, """
-                                 You are an Anki Instructional Designer. Create atomic, self-contained cards.
-                                 1. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
-                                 2. ATOMICITY: One card = One discrete fact.
-                                 3. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.
-                                 4. CLOZES: Use {{c1::answer::hint}}. Never cloze-delete the primary topic word, and only use hints if required for context.
-                                 """),
-
-            new(ChatRole.User,
-                $"Context: This note has the following categories: '{noteCategories}' and is titled '{fileName}'."),
+            new(ChatRole.System, systemPrompt.ToString()),
+            new(ChatRole.User, $"Context: This note has the following categories: '{noteCategories}' and is titled '{fileName}'."),
         };
 
         if (!string.Equals(Path.GetFileNameWithoutExtension(fileName), header, StringComparison.OrdinalIgnoreCase))
@@ -300,90 +315,77 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             messages.Add(new(ChatRole.User, $"Section Name: {header}"));
         }
 
-        // Add example responses to help generate better results
-        messages.Add(new(ChatRole.Assistant, """
-                                             Examples:
-                                             - Set: [{"text": "{{c1::Canberra::city}} was founded in {{c2::1913}}"}]
-                                             - Vocab: [{"text": "{{c1::Bonjour::French}} is used for {{c2::greeting someone in the morning}}."}]
-                                             - Q&A: [{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}]
-                                             - List: "text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"
-                                             """));
-        
-        // Add actual text extracted from document
+        messages.Add(new(ChatRole.Assistant, assistantPrompt.ToString()));
         messages.Add(new (ChatRole.User, $@"Content to convert:\n{content}\n\nTask: Create atomic Anki flashcards from this content."));
         
         return messages;
     }
     
-    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsApiAsync(string content, Dictionary<object, object> frontMatter, string fileName, string header, string model, string apiKey)
+    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsApiAsync(string content,
+        Dictionary<object, object> frontMatter, string relativePath, string fileName, string header, string model,
+        string apiKey)
     {
         using var lease = await GeminiRateLimiter.AcquireAsync();
+        var promptMessages = GetPromptMessages(content, frontMatter, relativePath, header);
+        var gemini = new GeminiChatClient(new GeminiClientOptions
+        {
+            ApiKey = apiKey,
+            ModelId = model,
+        });
+
+        using var loggerFactory = LoggerFactory.Create(builder =>
+        {
+            builder.AddConsole();
+            builder.SetMinimumLevel(LogLevel.Warning);
+        });
+
+        var client = new ChatClientBuilder(gemini)
+            .UseLogging(loggerFactory)
+            .Build();
+
+        var options = new ChatOptions
+        {
+            ResponseFormat = ChatResponseFormat.ForJsonSchema<FlashcardTransport[]>(),
+            Temperature = 0.15f,
+        };
+
+        var response = await client.GetResponseAsync(promptMessages, options);
+
+        if (response.FinishReason != ChatFinishReason.Stop)
+        {
+            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {response.FinishReason}");
+            return Array.Empty<Flashcard>();
+        }
+
         try
         {
-            var promptMessages = GetPromptMessages(content, frontMatter, fileName, header);
-            var gemini = new GeminiChatClient(new GeminiClientOptions
-            {
-                ApiKey = apiKey,
-                ModelId = model,
-            });
-
-            using var loggerFactory = LoggerFactory.Create(builder =>
-            {
-                builder.AddConsole();
-                builder.SetMinimumLevel(LogLevel.Warning);
-            });
-
-            var client = new ChatClientBuilder(gemini)
-                .UseLogging(loggerFactory)
-                .Build();
-
-            var options = new ChatOptions
-            {
-                ResponseFormat = ChatResponseFormat.ForJsonSchema<FlashcardTransport[]>(),
-                Temperature = 0.15f,
-            };
-
-            var response = await client.GetResponseAsync(promptMessages, options);
-
-            if (response.FinishReason != ChatFinishReason.Stop)
-            {
-                Console.WriteLine($"Error deserializing JSON for chunk '{header}': {response.FinishReason}");
-                return Array.Empty<Flashcard>();
-            }
-
-            try
-            {
-                var transport = JsonSerializer.Deserialize<FlashcardTransport[]>(response.Text) ?? [];
-                return transport.Select(x =>
+            var transport = JsonSerializer.Deserialize<FlashcardTransport[]>(response.Text) ?? [];
+            return transport.Select(x =>
+                {
+                    Flashcard card = x.Type switch
                     {
-                        Flashcard card = x.Type switch
-                        {
-                            FlashcardType.Basic => new BasicFlashcard(x),
-                            FlashcardType.Cloze => new ClozeFlashcard(x),
-                            _ => throw new InvalidOperationException(),
-                        };
-                        card.SourceNote = fileName; // which is now the relative path
-                        card.SourceSection = header;
-                        return card;
-                    })
-                    .ToArray();
-            }
-            catch(JsonException ex)
-            {
-                Console.WriteLine($"Error deserializing JSON for chunk '{header}': {ex.Message}");
-                Console.WriteLine($"-- Invalid JSON -- {response.Text} ------------------");
-                return new List<Flashcard>();
-            }
+                        FlashcardType.Basic => new BasicFlashcard(x),
+                        FlashcardType.Cloze => new ClozeFlashcard(x),
+                        _ => throw new InvalidOperationException(),
+                    };
+                    
+                    card.Source = string.Format(CardSourceFormat, fileName, header); // which is now the relative path
+                    return card;
+                })
+                .ToArray();
         }
-        finally
+        catch(JsonException ex)
         {
-            lease.Dispose();
+            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {ex.Message}");
+            Console.WriteLine($"-- Invalid JSON -- {response.Text} ------------------");
+            return new List<Flashcard>();
         }
     }
 
-    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsCliAsync(string content, Dictionary<object, object> frontMatter, string fileName, string header, string model)
+    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsCliAsync(string content,
+        Dictionary<object, object> frontMatter, string relativePath, string fileName, string header, string model)
     {
-        var promptMessages = GetPromptMessages(content, frontMatter, fileName, header)
+        var promptMessages = GetPromptMessages(content, frontMatter, relativePath, header)
             .Select(x => x.Text);
         var prompt = string.Join(Environment.NewLine, promptMessages);
 
@@ -444,8 +446,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             var flashcards = JsonSerializer.Deserialize<List<Flashcard>>(jsonOutput, jsonOptions) ?? new List<Flashcard>();
             foreach (var card in flashcards)
             {
-                card.SourceNote = fileName;
-                card.SourceSection = header;
+                card.Source = string.Format(CardSourceFormat, fileName, header);
             }
             return flashcards;
         }

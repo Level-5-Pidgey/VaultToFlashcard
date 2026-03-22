@@ -29,8 +29,7 @@ public class FlashcardTransport
 public abstract class Flashcard(FlashcardType type)
 {
     public FlashcardType Type { get; set; } = type;
-    public string SourceNote { get; set; } = "";
-    public string SourceSection { get; set; } = "";
+    public string Source { get; set; } = "";
 }
 
 public class BasicFlashcard() : Flashcard(FlashcardType.Basic)

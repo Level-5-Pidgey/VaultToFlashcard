@@ -42,8 +42,8 @@ public class AnkiConnectClient
     public async Task<IReadOnlyCollection<long>> AddNotesAsync(IReadOnlyCollection<Flashcard> flashcards, string deckName, IReadOnlyCollection<string> tags)
     {
         var notes = new List<AnkiNote>();
-        var allTags = new[] { "obsidian-auto-generated" }
-            .Concat(tags.Select(tag => tag.Replace(' ', '_')))
+        var allTags = new[] { "Obsidian-Generated" }
+            .Concat(tags.Select(tag => tag.Replace(' ', '-')))
             .ToHashSet();
         
         foreach (var card in flashcards)
@@ -51,10 +51,10 @@ public class AnkiConnectClient
             switch (card)
             {
                 case BasicFlashcard basic:
-                    notes.Add(new AnkiNote(deckName, "Basic", new { basic.Front, basic.Back, SourceNote = card.SourceNote, SourceSection = card.SourceSection }, allTags));
+                    notes.Add(new AnkiNote(deckName, "Basic", new { basic.Front, basic.Back, card.Source, }, allTags));
                     break;
                 case ClozeFlashcard cloze:
-                    notes.Add(new AnkiNote(deckName, "Cloze", new { cloze.Text, SourceNote = card.SourceNote, SourceSection = card.SourceSection }, allTags));
+                    notes.Add(new AnkiNote(deckName, "Cloze", new { cloze.Text, card.Source, }, allTags));
                     break;
             }
         }

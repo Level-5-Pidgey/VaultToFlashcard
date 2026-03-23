@@ -284,10 +284,11 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         var containsList = Regex.IsMatch(content, @"^\s*-\s+", RegexOptions.Multiline);
 
         var systemPrompt = new StringBuilder("""
-                                             You are an Anki Instructional Designer. Create self-contained cards using either Cloze or Basic format, with HTML tags for styling.
-                                             1. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
-                                             2. ATOMICITY: One card = One discrete fact.
-                                             3. CLOZES: Use {{c1::answer::hint}}. Never cloze-delete the primary topic word, and only use hints if required for context.
+                                             You are an Anki Instructional Designer. Create self-contained cards on the content provided using either Cloze or Basic format. Utilize HTML tags for styling. Important rules:
+                                             1. BREVITY: Ensure the facts being placed into flashcards are the most crucial parts of the text. Skip sections of text that are superfluous or not assessing a fact (e.g. opinionated).
+                                             2. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
+                                             3. ATOMICITY: One card = One discrete fact. 
+                                             4. CLOZES: Use {{c1::answer::hint}}. Clozes cards must have at *least* two -- never have a flashcard with a single cloze. Never cloze-delete the primary topic word, and only use hints if required for context.
                                              """);
 
         var assistantPrompt = new StringBuilder("""
@@ -300,7 +301,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         if (containsList)
         {
             systemPrompt.AppendLine(
-                "4. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
+                "5. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
             assistantPrompt.AppendLine("""- List: [{"text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"}]""");
         }
         

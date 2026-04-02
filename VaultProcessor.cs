@@ -196,8 +196,28 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 
                 if (cachedEntry != null && cachedEntry.ContentHash == contentHash)
                 {
-                    Console.WriteLine($"  - SKIPPING: '{header}' (unchanged)");
+                    Console.WriteLine($"  - CHECKING: '{header}' (unchanged content)");
 
+                    // New tag update logic
+                    if (cachedEntry.NoteIds.Any())
+                    {
+                        var noteInfos = await ankiClient.NotesInfoAsync(cachedEntry.NoteIds);
+                        var expectedTags = new HashSet<string>(
+                            new[] { "Obsidian-Generated" }
+                                .Concat(tags.Select(tag => tag.Replace(' ', '-')))
+                        );
+
+                        foreach (var noteInfo in noteInfos)
+                        {
+                            var currentTags = new HashSet<string>(noteInfo.Tags);
+                            if (!currentTags.SetEquals(expectedTags))
+                            {
+                                Console.WriteLine($"  - UPDATING TAGS: for note {noteInfo.NoteId}");
+                                await ankiClient.UpdateNoteTagsAsync(noteInfo.NoteId, tags);
+                            }
+                        }
+                    }
+                    
                     foreach (var newNoteId in cachedEntry.NoteIds)
                     {
                         allValidNoteIds.Add(newNoteId);

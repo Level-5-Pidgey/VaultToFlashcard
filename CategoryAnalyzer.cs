@@ -137,6 +137,7 @@ public partial class CategoryAnalyzer
         var deckName = string.Join("::", deckPath);
         var tags = cleanedCategories
             .Except(bestPath)
+            .Select(tag => $"{deckName}::{tag}")
             .ToArray();
 
         return (deckName, tags);

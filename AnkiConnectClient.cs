@@ -127,6 +127,26 @@ public class AnkiConnectClient
         return new List<string>();
     }
     
+    public async Task<IReadOnlyCollection<AnkiNoteInfo>> NotesInfoAsync(IReadOnlyCollection<long> noteIds)
+    {
+        if (!noteIds.Any()) return Array.Empty<AnkiNoteInfo>();
+        var action = new AnkiAction("notesInfo", new { notes = noteIds });
+        var result = await PostAsync(action);
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        return result.ValueKind == JsonValueKind.Array 
+            ? result.Deserialize<IReadOnlyCollection<AnkiNoteInfo>>(options) ?? Array.Empty<AnkiNoteInfo>()
+            : Array.Empty<AnkiNoteInfo>();
+    }
+
+    public async Task UpdateNoteTagsAsync(long noteId, IReadOnlyCollection<string> tags)
+    {
+        var allTags = new[] { "Obsidian-Generated" }
+            .Concat(tags.Select(tag => tag.Replace(' ', '-')))
+            .ToArray();
+        var action = new AnkiAction("updateNoteTags", new { note = noteId, tags = allTags });
+        await PostAsync(action);
+    }
+    
     
     private async Task<JsonElement> PostAsync(AnkiAction action)
     {
@@ -191,5 +211,10 @@ public record AnkiNote(
     [property: JsonPropertyName("deckName")] string DeckName,
     [property: JsonPropertyName("modelName")] string ModelName,
     [property: JsonPropertyName("fields")] object Fields,
+    [property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags
+);
+
+public record AnkiNoteInfo(
+    [property: JsonPropertyName("noteId")] long NoteId,
     [property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags
 );

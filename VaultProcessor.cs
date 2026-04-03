@@ -198,31 +198,31 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 {
                     Console.WriteLine($"  - CHECKING: '{header}' (unchanged content)");
 
-                    // New tag update logic
                     if (cachedEntry.NoteIds.Any())
                     {
-                        var noteInfos = await ankiClient.NotesInfoAsync(cachedEntry.NoteIds);
-                        var expectedTags = new HashSet<string>(
-                            new[] { "Obsidian-Generated" }
-                                .Concat(tags.Select(tag => tag.Replace(' ', '-')))
-                        );
+                        var notesInfoResult = await ankiClient.GetNotesInfoResilientAsync(cachedEntry.NoteIds);
 
-                        foreach (var noteInfo in noteInfos)
+                        if (notesInfoResult.NotFound.Any())
                         {
-                            var currentTags = new HashSet<string>(noteInfo.Tags);
-                            if (!currentTags.SetEquals(expectedTags))
+                            Console.WriteLine($"  - PRUNING: Detected {notesInfoResult.NotFound.Count} manually deleted notes for section '{header}'.");
+                            var validNoteIds = cachedEntry.NoteIds.Except(notesInfoResult.NotFound).ToList();
+                            if (validNoteIds.Any())
                             {
-                                Console.WriteLine($"  - UPDATING TAGS: for note {noteInfo.NoteId}");
-                                await ankiClient.UpdateNoteTagsAsync(noteInfo.NoteId, tags);
+                                Cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
                             }
+                            else
+                            {
+                                Cache.TryRemove(cacheKey, out _);
+                            }
+                        }
+
+                        foreach (var noteInfo in notesInfoResult.Succeeded)
+                        {
+                            await ankiClient.MergeTagsAsync(noteInfo.NoteId, tags);
+                            allValidNoteIds.Add(noteInfo.NoteId);
                         }
                     }
                     
-                    foreach (var newNoteId in cachedEntry.NoteIds)
-                    {
-                        allValidNoteIds.Add(newNoteId);
-                    }
-
                     continue;
                 }
 
@@ -536,10 +536,16 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         switch (obj)
         {
             case HeadingBlock heading:
-                foreach(var inline in heading.Inline) ExtractTextRecursive(inline, sb);
+                if (heading.Inline != null)
+                {
+                    foreach(var inline in heading.Inline) ExtractTextRecursive(inline, sb);
+                }
                 break;
             case ParagraphBlock paragraph:
-                foreach (var inline in paragraph.Inline) ExtractTextRecursive(inline, sb);
+                if (paragraph.Inline != null)
+                {
+                    foreach (var inline in paragraph.Inline) ExtractTextRecursive(inline, sb);
+                }
                 sb.AppendLine();
                 break;
             case FencedCodeBlock fencedCodeBlock:

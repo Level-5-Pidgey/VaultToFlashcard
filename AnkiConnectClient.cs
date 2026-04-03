@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace VaultToFlashcard;
 
@@ -138,13 +139,74 @@ public class AnkiConnectClient
             : Array.Empty<AnkiNoteInfo>();
     }
 
-    public async Task UpdateNoteTagsAsync(long noteId, IReadOnlyCollection<string> tags)
+    public async Task<AnkiNotesInfoResult> GetNotesInfoResilientAsync(IReadOnlyCollection<long> noteIds)
     {
-        var allTags = new[] { "Obsidian-Generated" }
-            .Concat(tags.Select(tag => tag.Replace(' ', '-')))
-            .ToArray();
-        var action = new AnkiAction("updateNoteTags", new { note = noteId, tags = allTags });
-        await PostAsync(action);
+        if (!noteIds.Any()) return new AnkiNotesInfoResult(Array.Empty<AnkiNoteInfo>(), Array.Empty<long>());
+
+        try
+        {
+            var notesInfo = await NotesInfoAsync(noteIds);
+            return new AnkiNotesInfoResult(notesInfo, Array.Empty<long>());
+        }
+        catch (Exception ex) when (ex.Message.Contains("notes were not found"))
+        {
+            var notFoundIds = new Regex(@"\d+").Matches(ex.Message)
+                .Select(m => long.Parse(m.Value))
+                .ToHashSet();
+            
+            var succeededIds = noteIds.Except(notFoundIds).ToList();
+            
+            if (succeededIds.Any())
+            {
+                var recursiveResult = await GetNotesInfoResilientAsync(succeededIds);
+                return new AnkiNotesInfoResult(recursiveResult.Succeeded, notFoundIds.Concat(recursiveResult.NotFound).ToArray());
+            }
+
+            return new AnkiNotesInfoResult(Array.Empty<AnkiNoteInfo>(), notFoundIds.ToArray());
+        }
+    }
+
+    public async Task<AnkiNoteInfo?> GetNoteInfoAsync(long noteId)
+    {
+        var result = await GetNotesInfoResilientAsync(new[] { noteId });
+        return result.Succeeded.FirstOrDefault();
+    }
+
+    public async Task MergeTagsAsync(long noteId, IReadOnlyCollection<string> newSystemTags)
+    {
+        var noteInfo = await GetNoteInfoAsync(noteId);
+        if (noteInfo == null) return; // Note was deleted or is invalid
+
+        var currentTags = new HashSet<string>(noteInfo.Tags);
+        var finalTags = new HashSet<string>(currentTags);
+
+        // Normalize for comparison: "My-Tag" should match "My Tag"
+        Func<string, string> normalize = s => s.Replace('-', ' ').Replace('_', ' ').ToLowerInvariant();
+
+        var normalizedNewSystemTags = newSystemTags.Select(normalize).ToHashSet();
+        
+        // Remove any old system tags that are no longer relevant
+        foreach (var tag in currentTags)
+        {
+            if (normalizedNewSystemTags.Contains(normalize(tag)))
+            {
+                finalTags.Remove(tag);
+            }
+        }
+        
+        // Add the new system tags
+        foreach (var tag in newSystemTags)
+        {
+            finalTags.Add(tag.Replace(' ', '-'));
+        }
+        finalTags.Add("Obsidian-Generated");
+
+        // Only call the API if the tags have actually changed
+        if (!finalTags.SetEquals(currentTags))
+        {
+            var action = new AnkiAction("updateNoteTags", new { note = noteId, tags = finalTags.ToArray() });
+            await PostAsync(action);
+        }
     }
     
     
@@ -218,3 +280,5 @@ public record AnkiNoteInfo(
     [property: JsonPropertyName("noteId")] long NoteId,
     [property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags
 );
+
+public record AnkiNotesInfoResult(IReadOnlyCollection<AnkiNoteInfo> Succeeded, IReadOnlyCollection<long> NotFound);

@@ -17,7 +17,7 @@ using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
-public class VaultProcessor(AnkiConnectClient ankiClient)
+public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 {
     private readonly CategoryAnalyzer CategoryAnalyzer = new();
     private ConcurrentDictionary<string, CacheEntry> Cache = new();
@@ -75,9 +75,15 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             Cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
         }
 
-        
-        await ankiClient.EnsureFieldsExist("Basic", new[] { "Source" });
-        await ankiClient.EnsureFieldsExist("Cloze", new[] { "Source" });
+        if (!readOnly)
+        {
+            await ankiClient.EnsureFieldsExist("Basic", new[] { "Source" });
+            await ankiClient.EnsureFieldsExist("Cloze", new[] { "Source" });
+        }
+        else
+        {
+            Console.WriteLine("[Read-Only] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
+        }
 
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
             .Where(p => !p.Contains(CacheFileName))
@@ -106,9 +112,16 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
 
         await CleanUpOrphanedNotesAsync(allValidNoteIds);
         
-        Console.WriteLine("Saving cache...");
-        var newJson = JsonSerializer.Serialize(Cache, JsonOptions);
-        await File.WriteAllTextAsync(cachePath, newJson);
+        if (!readOnly)
+        {
+            Console.WriteLine("Saving cache...");
+            var newJson = JsonSerializer.Serialize(Cache, JsonOptions);
+            await File.WriteAllTextAsync(cachePath, newJson);
+        }
+        else
+        {
+            Console.WriteLine("[Read-Only] Skipping cache save.");
+        }
 
         Console.WriteLine("Vault processing complete.");
     }
@@ -124,7 +137,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
         if (orphanedIds.Any())
         {
             Console.WriteLine($"  > Found {orphanedIds.Count} orphaned notes to delete.");
-            await ankiClient.DeleteNotesAsync(orphanedIds);
+            if (!readOnly)
+            {
+                await ankiClient.DeleteNotesAsync(orphanedIds);
+            }
+            else
+            {
+                Console.WriteLine($"[Read-Only] Would delete {orphanedIds.Count} orphaned notes.");
+            }
         }
         else
         {
@@ -163,7 +183,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
             var contentChunks = ParseAndSanitize(markdownContent);
 
             var (deckName, tags) = ResolveDeckName(filePath, frontMatter);
-            await ankiClient.CreateDeckAsync(deckName);
+            if (!readOnly)
+            {
+                await ankiClient.CreateDeckAsync(deckName);
+            }
+            else
+            {
+                Console.WriteLine($"[Read-Only] Would create deck '{deckName}'.");
+            }
 
             var allSectionKeys = new HashSet<string>();
 
@@ -183,8 +210,15 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 if (cachedEntry != null && cachedEntry.DeckName != deckName && cachedEntry.ContentHash == contentHash)
                 {
                     Console.WriteLine($"  - MOVING: '{header}' from deck '{cachedEntry.DeckName}' to '{deckName}'");
-                    await ankiClient.ChangeDeckAsync(cachedEntry.NoteIds, deckName);
-                    Cache[cacheKey] = cachedEntry with { DeckName = deckName };
+                    if (!readOnly)
+                    {
+                        await ankiClient.ChangeDeckAsync(cachedEntry.NoteIds, deckName);
+                        Cache[cacheKey] = cachedEntry with { DeckName = deckName };
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[Read-Only] Would move {cachedEntry.NoteIds.Count} notes to deck '{deckName}'.");
+                    }
 
                     foreach (var newNoteId in cachedEntry.NoteIds)
                     {
@@ -206,19 +240,29 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                         {
                             Console.WriteLine($"  - PRUNING: Detected {notesInfoResult.NotFound.Count} manually deleted notes for section '{header}'.");
                             var validNoteIds = cachedEntry.NoteIds.Except(notesInfoResult.NotFound).ToList();
-                            if (validNoteIds.Any())
+                            if (!readOnly)
                             {
-                                Cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
-                            }
-                            else
-                            {
-                                Cache.TryRemove(cacheKey, out _);
+                                if (validNoteIds.Any())
+                                {
+                                    Cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
+                                }
+                                else
+                                {
+                                    Cache.TryRemove(cacheKey, out _);
+                                }
                             }
                         }
 
                         foreach (var noteInfo in notesInfoResult.Succeeded)
                         {
-                            await ankiClient.MergeTagsAsync(noteInfo.NoteId, tags);
+                            if (!readOnly)
+                            {
+                                await ankiClient.MergeTagsAsync(noteInfo.NoteId, tags);
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[Read-Only] Would merge tags for note {noteInfo.NoteId}.");
+                            }
                             allValidNoteIds.Add(noteInfo.NoteId);
                         }
                     }
@@ -227,6 +271,16 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 }
 
                 Console.WriteLine($"  - PROCESSING: '{header}' (new or changed)");
+
+                if (readOnly)
+                {
+                    if (cachedEntry != null)
+                    {
+                        Console.WriteLine($"[Read-Only] Would delete {cachedEntry.NoteIds.Count} old note(s).");
+                    }
+                    Console.WriteLine($"[Read-Only] Would generate and add new flashcards for this section.");
+                    continue; // Skip to next content chunk
+                }
 
                 if (cachedEntry != null)
                 {
@@ -253,7 +307,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 {
                     var newNoteIds = await ankiClient.AddNotesAsync(flashcards, deckName, tags);
                     Console.WriteLine($"    > Synced {newNoteIds.Count} flashcards to Anki deck '{deckName}'.");
-                    Cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
+                    if (!readOnly)
+                    {
+                        Cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
+                    }
 
                     foreach (var newNoteId in newNoteIds)
                     {
@@ -262,7 +319,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient)
                 }
                 else if (Cache.ContainsKey(cacheKey))
                 {
-                    Cache.TryRemove(cacheKey, out _);
+                    if (!readOnly)
+                    {
+                        Cache.TryRemove(cacheKey, out _);
+                    }
                 }
             }
         }

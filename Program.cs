@@ -26,12 +26,18 @@ public class Program
             name: "--model",
             description: "The Gemini model to use.",
             getDefaultValue: () => "gemini-3-flash-preview");
+        
+        var readOnlyOption = new Option<bool>(
+            name: "--read-only",
+            description: "Enable read-only mode, which simulates changes without making them.",
+            getDefaultValue: () => false);
 
         rootCommand.AddOption(vaultOption);
         rootCommand.AddOption(aiModeOption);
         rootCommand.AddOption(modelOption);
+        rootCommand.AddOption(readOnlyOption);
 
-        rootCommand.SetHandler(async (vaultPath, aiMode, model) =>
+        rootCommand.SetHandler(async (vaultPath, aiMode, model, readOnly) =>
         {
             var configuration = new ConfigurationBuilder()
                 .AddUserSecrets<Program>()
@@ -49,16 +55,23 @@ public class Program
                 return;
             }
             
+            if (readOnly)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("Running in read-only mode. No changes will be made to Anki.");
+                Console.ResetColor();
+            }
+            
             var ankiClient = new AnkiConnectClient();
             if (!await ankiClient.IsAvailableAsync())
             {
                 Console.WriteLine("AnkiConnect not available. Please ensure Anki is running with AnkiConnect installed and configured.");
                 return;
             }
-            var processor = new VaultProcessor(ankiClient);
+            var processor = new VaultProcessor(ankiClient, readOnly);
             await processor.ProcessVault(vaultPath.FullName, aiMode, apiKey ?? string.Empty, model);
 
-        }, vaultOption, aiModeOption, modelOption);
+        }, vaultOption, aiModeOption, modelOption, readOnlyOption);
 
         return await rootCommand.InvokeAsync(args);
     }

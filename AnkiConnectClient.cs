@@ -2,6 +2,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Spectre.Console;
 
 namespace VaultToFlashcard;
 
@@ -101,17 +102,17 @@ public class AnkiConnectClient
 
         foreach (var field in missingFields)
         {
-            Console.WriteLine($"Field '{field}' not found in model '{modelName}'. Attempting to add it...");
+            AnsiConsole.MarkupLine($"[yellow]Field '{field}' not found in model '{modelName}'. Attempting to add it...[/]");
             try
             {
                 var action = new AnkiAction("modelFieldAdd", new { modelName, fieldName = field });
                 await PostAsync(action);
-                Console.WriteLine($"Successfully added field '{field}' to model '{modelName}'.");
+                AnsiConsole.MarkupLine($"[green]Successfully added field '{field}' to model '{modelName}'.[/]");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Failed to add field '{field}' to model '{modelName}'. Please add it manually via Anki's 'Tools > Manage Note Types' menu.");
-                Console.WriteLine($"Error: {ex.Message}");
+                AnsiConsole.MarkupLine($"[red]Failed to add field '{field}' to model '{modelName}'. Please add it manually via Anki's 'Tools > Manage Note Types' menu.[/]");
+                AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
                 throw new Exception($"Failed to automatically add required field '{field}' to Anki model '{modelName}'. Please add it manually and restart the process.", ex);
             }
         }

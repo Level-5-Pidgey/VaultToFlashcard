@@ -13,14 +13,15 @@ using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Spectre.Console;
 using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
 public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 {
-    private readonly CategoryAnalyzer CategoryAnalyzer = new();
-    private ConcurrentDictionary<string, CacheEntry> Cache = new();
+    private readonly CategoryAnalyzer _categoryAnalyzer = new();
+    private ConcurrentDictionary<string, CacheEntry> _cache = new();
 
     private const string CacheFileName = ".obsidian-anki-cache.json";
     private const string CardSourceFormat = "{0}#{1}";
@@ -35,9 +36,9 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
     });
     private static readonly SemaphoreSlim FileProcessingSemaphore = new(10);
 
-    private async Task AnalyzeAllCategoriesAsync(IEnumerable<string> markdownFiles)
+    private async Task AnalyzeAllCategoriesAsync(IEnumerable<string> markdownFiles, ProgressTask task)
     {
-        Console.WriteLine("Analyzing categories across the vault...");
+        task.StartTask();
         var deserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
         var yamlHeaderMatch = new Regex(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
 
@@ -55,24 +56,24 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
                 {
                     var categories = catList.Select(c => c.ToString()!).ToList();
-                    CategoryAnalyzer.Analyze(categories);
+                    _categoryAnalyzer.Analyze(categories);
                 }
             }
         }
-        CategoryAnalyzer.FinalizeAnalysis();
-        Console.WriteLine("Category analysis complete.");
+        _categoryAnalyzer.FinalizeAnalysis();
+        task.StopTask();
     }
 
     public async Task ProcessVault(string vaultPath, string aiMode, string apiKey, string model)
     {
-        Console.WriteLine($"Starting vault processing at: {vaultPath}");
+        AnsiConsole.MarkupLine($"Starting vault processing at: [blue]{vaultPath}[/]");
         var cachePath = Path.Combine(vaultPath, CacheFileName);
 
         if (File.Exists(cachePath))
         {
-            Console.WriteLine("Loading cache...");
+            AnsiConsole.MarkupLine("Loading cache...");
             var json = await File.ReadAllTextAsync(cachePath);
-            Cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
+            _cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
         }
 
         if (!readOnly)
@@ -82,53 +83,90 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         }
         else
         {
-            Console.WriteLine("[Read-Only] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
+            AnsiConsole.MarkupLine("[yellow][[Read-Only]][/] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
         }
 
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
             .Where(p => !p.Contains(CacheFileName))
             .ToList();
         
-        await AnalyzeAllCategoriesAsync(markdownFiles);
-
-        var allValidNoteIds = new ConcurrentBag<long>();
-        var processingTasks = new List<Task>();
-        foreach (var filePath in markdownFiles)
+        var summary = new ProcessingSummary
         {
-            await FileProcessingSemaphore.WaitAsync();
-            processingTasks.Add(Task.Run(async () =>
-            {
-                try
-                {
-                    await ProcessFileAsync(filePath, aiMode, apiKey, model, vaultPath, allValidNoteIds);
-                }
-                finally
-                {
-                    FileProcessingSemaphore.Release();
-                }
-            }));
-        }
-        await Task.WhenAll(processingTasks);
-
-        await CleanUpOrphanedNotesAsync(allValidNoteIds);
+            TotalFiles = markdownFiles.Count
+        };
+        var allResults = new ConcurrentBag<(string RelativePath, Tree Tree)>();
         
+        await AnsiConsole.Progress()
+            .Columns(new ProgressColumn[]
+            {
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new RemainingTimeColumn(),
+                new SpinnerColumn(),
+            })
+            .StartAsync(async ctx =>
+            {
+                var analysisTask = ctx.AddTask("[green]Analyzing categories[/]");
+                await AnalyzeAllCategoriesAsync(markdownFiles, analysisTask);
+
+                var processingTask = ctx.AddTask("[green]Processing files[/]", new ProgressTaskSettings { MaxValue = markdownFiles.Count, AutoStart = false });
+                var allValidNoteIds = new ConcurrentBag<long>();
+                var processingTasks = new List<Task>();
+                
+                foreach (var filePath in markdownFiles)
+                {
+                    await FileProcessingSemaphore.WaitAsync();
+                    processingTasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, aiMode, apiKey, model, vaultPath, allValidNoteIds);
+                            summary.Aggregate(fileSummary);
+                            if (tree != null && relativePath != null)
+                            {
+                                allResults.Add((relativePath, tree));
+                            }
+                        }
+                        finally
+                        {
+                            FileProcessingSemaphore.Release();
+                            processingTask.Increment(1);
+                        }
+                    }));
+                }
+
+                processingTask.StartTask();
+                await Task.WhenAll(processingTasks);
+                
+                var cleanupTask = ctx.AddTask("[green]Cleaning up orphaned notes[/]");
+                var orphanedCount = await CleanUpOrphanedNotesAsync(allValidNoteIds, cleanupTask);
+                summary.OrphanedNotesDeleted = orphanedCount;
+            });
+        
+        foreach (var result in allResults.OrderBy(r => r.RelativePath))
+        {
+            AnsiConsole.Write(result.Tree);
+        }
+
         if (!readOnly)
         {
-            Console.WriteLine("Saving cache...");
-            var newJson = JsonSerializer.Serialize(Cache, JsonOptions);
+            AnsiConsole.MarkupLine("Saving cache...");
+            var newJson = JsonSerializer.Serialize(_cache, JsonOptions);
             await File.WriteAllTextAsync(cachePath, newJson);
         }
         else
         {
-            Console.WriteLine("[Read-Only] Skipping cache save.");
+            AnsiConsole.MarkupLine("[yellow][[Read-Only]][/] Skipping cache save.");
         }
 
-        Console.WriteLine("Vault processing complete.");
+        DisplaySummary(summary);
+        AnsiConsole.MarkupLine("[bold green]Vault processing complete.[/]");
     }
 
-    private async Task CleanUpOrphanedNotesAsync(ConcurrentBag<long> validNoteIds)
+    private async Task<int> CleanUpOrphanedNotesAsync(ConcurrentBag<long> validNoteIds, ProgressTask task)
     {
-        Console.WriteLine("Cleaning up orphaned notes...");
+        task.StartTask();
         var ankiNoteIds = await ankiClient.FindAllTaggedNotesAsync();
     
         var validIdSet = new HashSet<long>(validNoteIds);
@@ -136,31 +174,37 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
         if (orphanedIds.Any())
         {
-            Console.WriteLine($"  > Found {orphanedIds.Count} orphaned notes to delete.");
+            AnsiConsole.MarkupLine($"  > Found {orphanedIds.Count} orphaned notes to delete.");
             if (!readOnly)
             {
                 await ankiClient.DeleteNotesAsync(orphanedIds);
             }
             else
             {
-                Console.WriteLine($"[Read-Only] Would delete {orphanedIds.Count} orphaned notes.");
+                AnsiConsole.MarkupLine($"[yellow][[Read-Only]][/] Would delete {orphanedIds.Count} orphaned notes.");
             }
         }
         else
         {
-            Console.WriteLine("  > No orphaned notes found.");
+            AnsiConsole.MarkupLine("  > No orphaned notes found.");
         }
+        task.StopTask();
+        return orphanedIds.Count;
     }
 
-    private async Task ProcessFileAsync(string filePath, string aiMode, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
+    private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath, string aiMode, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
     {
+        var summary = new ProcessingSummary();
+        var relativePath = Path.GetRelativePath(vaultPath, filePath);
+        var tree = new Tree($"[yellow]Processing:[/] [blue]{Markup.Escape(relativePath)}[/]");
+
         try
         {
             var fileContent = await File.ReadAllTextAsync(filePath);
             var yamlHeaderMatch = new Regex(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
             var match = yamlHeaderMatch.Match(fileContent);
 
-            if (!match.Success) return;
+            if (!match.Success) return (null, null, null);
 
             var yamlContent = match.Groups[1].Value;
             var markdownContent = fileContent.Substring(match.Length); 
@@ -170,16 +214,15 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
             if (!frontMatter.TryGetValue("study", out var studyValue))
             {
-                return;
+                return (null, null, null);
             }
 
             var shouldStudy = studyValue switch { true => true, "true" => true, _ => false };
             if (!shouldStudy)
             {
-                return;
+                return (null, null, null);
             }
             
-            Console.WriteLine($"Processing file: {filePath}");
             var contentChunks = ParseAndSanitize(markdownContent);
 
             var (deckName, tags) = ResolveDeckName(filePath, frontMatter);
@@ -189,10 +232,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
             }
             else
             {
-                Console.WriteLine($"[Read-Only] Would create deck '{deckName}'.");
+                tree.AddNode($"[yellow][[Read-Only]][/] Would create deck '{Markup.Escape(deckName)}'.");
             }
-
-            var allSectionKeys = new HashSet<string>();
 
             foreach (var (header, content) in contentChunks)
             {
@@ -202,35 +243,30 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 }
 
                 var cacheKey = $"{Path.GetRelativePath(vaultPath, filePath)}#{header}";
-                allSectionKeys.Add(cacheKey);
                 var contentHash = CalculateHash(content);
 
-                Cache.TryGetValue(cacheKey, out var cachedEntry);
+                _cache.TryGetValue(cacheKey, out var cachedEntry);
 
                 if (cachedEntry != null && cachedEntry.DeckName != deckName && cachedEntry.ContentHash == contentHash)
                 {
-                    Console.WriteLine($"  - MOVING: '{header}' from deck '{cachedEntry.DeckName}' to '{deckName}'");
+                    tree.AddNode($"[yellow]MOVED:[/] '{Markup.Escape(header)}' from deck '{Markup.Escape(cachedEntry.DeckName)}' to '{Markup.Escape(deckName)}'");
+                    summary.NotesMoved++;
                     if (!readOnly)
                     {
                         await ankiClient.ChangeDeckAsync(cachedEntry.NoteIds, deckName);
-                        Cache[cacheKey] = cachedEntry with { DeckName = deckName };
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[Read-Only] Would move {cachedEntry.NoteIds.Count} notes to deck '{deckName}'.");
+                        _cache[cacheKey] = cachedEntry with { DeckName = deckName };
                     }
 
                     foreach (var newNoteId in cachedEntry.NoteIds)
                     {
                         allValidNoteIds.Add(newNoteId);
                     }
-
                     continue;
                 }
                 
                 if (cachedEntry != null && cachedEntry.ContentHash == contentHash)
                 {
-                    Console.WriteLine($"  - CHECKING: '{header}' (unchanged content)");
+                    tree.AddNode($"[grey]CHECKING:[/] '{Markup.Escape(header)}' (unchanged content)");
 
                     if (cachedEntry.NoteIds.Any())
                     {
@@ -238,17 +274,17 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
                         if (notesInfoResult.NotFound.Any())
                         {
-                            Console.WriteLine($"  - PRUNING: Detected {notesInfoResult.NotFound.Count} manually deleted notes for section '{header}'.");
+                            tree.AddNode($"[red]PRUNING:[/] Detected {notesInfoResult.NotFound.Count} manually deleted notes for section '{Markup.Escape(header)}'.");
                             var validNoteIds = cachedEntry.NoteIds.Except(notesInfoResult.NotFound).ToList();
                             if (!readOnly)
                             {
                                 if (validNoteIds.Any())
                                 {
-                                    Cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
+                                    _cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
                                 }
                                 else
                                 {
-                                    Cache.TryRemove(cacheKey, out _);
+                                    _cache.TryRemove(cacheKey, out _);
                                 }
                             }
                         }
@@ -259,80 +295,87 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                             {
                                 await ankiClient.MergeTagsAsync(noteInfo.NoteId, tags);
                             }
-                            else
-                            {
-                                Console.WriteLine($"[Read-Only] Would merge tags for note {noteInfo.NoteId}.");
-                            }
                             allValidNoteIds.Add(noteInfo.NoteId);
                         }
                     }
-                    
                     continue;
                 }
 
-                Console.WriteLine($"  - PROCESSING: '{header}' (new or changed)");
+                // New or Changed content
+                var wasCached = cachedEntry != null;
+                if (wasCached && !readOnly)
+                {
+                    await ankiClient.DeleteNotesAsync(cachedEntry!.NoteIds);
+                }
 
+                IReadOnlyCollection<Flashcard> flashcards;
                 if (readOnly)
                 {
-                    if (cachedEntry != null)
+                    flashcards = new List<Flashcard> { new BasicFlashcard() };
+                }
+                else
+                {
+                    switch (aiMode)
                     {
-                        Console.WriteLine($"[Read-Only] Would delete {cachedEntry.NoteIds.Count} old note(s).");
+                        case "cli":
+                            flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model);
+                            break;
+                        case "api":
+                            flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
+                            break;
+                        default:
+                            AnsiConsole.MarkupLine($"[red]Unknown ai-mode: {aiMode}[/]");
+                            continue;
                     }
-                    Console.WriteLine($"[Read-Only] Would generate and add new flashcards for this section.");
-                    continue; // Skip to next content chunk
-                }
-
-                if (cachedEntry != null)
-                {
-                    Console.WriteLine($"    > Deleting {cachedEntry.NoteIds.Count} old note(s).");
-                    await ankiClient.DeleteNotesAsync(cachedEntry.NoteIds);
-                }
-
-                var relativePath = Path.GetRelativePath(vaultPath, filePath);
-                IReadOnlyCollection<Flashcard> flashcards;
-                switch (aiMode)
-                {
-                    case "cli":
-                        flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model);
-                        break;
-                    case "api":
-                        flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
-                        break;
-                    default:
-                        Console.WriteLine($"Unknown ai-mode: {aiMode}");
-                        continue;
                 }
 
                 if (flashcards.Any())
                 {
-                    var newNoteIds = await ankiClient.AddNotesAsync(flashcards, deckName, tags);
-                    Console.WriteLine($"    > Synced {newNoteIds.Count} flashcards to Anki deck '{deckName}'.");
+                    IReadOnlyCollection<long> newNoteIds = new List<long>();
                     if (!readOnly)
                     {
-                        Cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
+                        newNoteIds = await ankiClient.AddNotesAsync(flashcards, deckName, tags);
+                        summary.NewFlashcards += newNoteIds.Count;
+                        _cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
+                        foreach (var newNoteId in newNoteIds)
+                        {
+                            allValidNoteIds.Add(newNoteId);
+                        }
                     }
 
-                    foreach (var newNoteId in newNoteIds)
+                    if (wasCached)
                     {
-                        allValidNoteIds.Add(newNoteId);
+                        var oldCount = cachedEntry!.NoteIds.Count;
+                        var newCount = readOnly ? "some" : $"{newNoteIds.Count}";
+                        tree.AddNode($"[yellow]MODIFIED:[/] '{Markup.Escape(header)}' ({oldCount} old -> {newCount} new)");
+                    }
+                    else
+                    {
+                        var newCount = readOnly ? "some" : $"{newNoteIds.Count}";
+                        tree.AddNode($"[green]ADDED:[/] '{Markup.Escape(header)}' ({newCount} flashcards)");
                     }
                 }
-                else if (Cache.ContainsKey(cacheKey))
+                else
                 {
-                    if (!readOnly)
+                    if (wasCached)
                     {
-                        Cache.TryRemove(cacheKey, out _);
+                        if (!readOnly)
+                        {
+                            _cache.TryRemove(cacheKey, out _);
+                        }
+                        tree.AddNode($"[red]DELETED:[/] '{Markup.Escape(header)}' ({cachedEntry!.NoteIds.Count} flashcards)");
                     }
+                    // If not wasCached and no flashcards, do nothing.
                 }
             }
+            
+            return (summary, tree, relativePath);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error processing file {filePath}: {ex.Message}");
-            if (ex.InnerException != null)
-            {
-                Console.WriteLine($"  Inner Exception: {ex.InnerException.Message}");
-            }
+            AnsiConsole.MarkupLine($"[red]Error processing file {filePath}[/]");
+            AnsiConsole.WriteException(ex);
+            return (null, null, null);
         }
     }
 
@@ -345,7 +388,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
         var categories = catList.Select(c => c.ToString()!).ToList();
         return categories.Any() ? 
-            CategoryAnalyzer.ResolveDeckName(categories) : 
+            _categoryAnalyzer.ResolveDeckName(categories) : 
             (Path.GetFileNameWithoutExtension(filePath), new List<string>());
     }
     
@@ -434,7 +477,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
         if (response.FinishReason != ChatFinishReason.Stop)
         {
-            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {response.FinishReason}");
+            AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
             return Array.Empty<Flashcard>();
         }
 
@@ -457,8 +500,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         }
         catch(JsonException ex)
         {
-            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {ex.Message}");
-            Console.WriteLine($"-- Invalid JSON -- {response.Text} ------------------");
+            AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
+            AnsiConsole.MarkupLine($"[red]-- Invalid JSON --[/] {Markup.Escape(response.Text)} [red]------------------[/]");
             return new List<Flashcard>();
         }
     }
@@ -511,7 +554,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         
         if (jsonStart == -1 || jsonEnd == -1)
         {
-            Console.WriteLine($"Warning: Could not find JSON array in the output from Gemini CLI for chunk '{header}'. Skipping.");
+            AnsiConsole.MarkupLine($"[yellow]Warning: Could not find JSON array in the output from Gemini CLI for chunk '{Markup.Escape(header)}'. Skipping.[/]");
             return new List<Flashcard>();
         }
 
@@ -533,9 +576,26 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         }
         catch(JsonException ex)
         {
-            Console.WriteLine($"Error deserializing JSON for chunk '{header}': {ex.Message}");
+            AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
             return new List<Flashcard>();
         }
+    }
+    
+    private void DisplaySummary(ProcessingSummary summary)
+    {
+        var table = new Table()
+            .AddColumn("Metric")
+            .AddColumn("Value")
+            .AddRow("Total Files", summary.TotalFiles.ToString())
+            .AddRow("Files Processed", summary.FilesProcessed.ToString())
+            .AddRow("New Flashcards", summary.NewFlashcards.ToString())
+            .AddRow("Notes Moved", summary.NotesMoved.ToString())
+            .AddRow("Orphaned Notes Deleted", summary.OrphanedNotesDeleted.ToString());
+
+        AnsiConsole.Write(
+            new Panel(table)
+                .Header("Processing Summary")
+                .Border(BoxBorder.Rounded));
     }
 
     private string CalculateHash(string text)

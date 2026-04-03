@@ -192,11 +192,52 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         return orphanedIds.Count;
     }
 
+    private enum FileUpdateType
+    {
+        Unchanged = 0,
+        Modified = 1,
+        Deleted = 2,
+        Created = 3,
+    }
+
+    private static string
+        GetFileUpdateResultString(string item, FileUpdateType fileUpdateType, string? extraText = null)
+    {
+        const string formattedTemplate = "[{0}]{1}[/] {2}";
+        var textColor = fileUpdateType switch
+        {
+            FileUpdateType.Unchanged => "Grey42",
+            FileUpdateType.Modified => "Grey70",
+            FileUpdateType.Deleted => "Red3_1",
+            FileUpdateType.Created => "SeaGreen2",
+            _ => throw new ArgumentOutOfRangeException(nameof(fileUpdateType), fileUpdateType, extraText)
+        };
+
+        var extraTextFormatted = string.Empty;
+        if (extraText is not null)
+        {
+            var extraTextColor = fileUpdateType switch
+            {
+                FileUpdateType.Unchanged => "Grey",
+                FileUpdateType.Modified => "Grey",
+                FileUpdateType.Deleted => "DarkRed_1",
+                FileUpdateType.Created => "DarkSeaGreen4_1",
+                _ => throw new ArgumentOutOfRangeException(nameof(fileUpdateType), fileUpdateType, extraText)
+            };
+                
+            extraTextFormatted = extraText.Length > 0 ? 
+                $"[{extraTextColor}]({Markup.Escape(extraText)})[/]" : 
+                string.Empty;
+        }
+
+        return string.Format(formattedTemplate, textColor, Markup.Escape(item), extraTextFormatted).Trim();
+    }
+
     private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath, string aiMode, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
     {
         var summary = new ProcessingSummary();
         var relativePath = Path.GetRelativePath(vaultPath, filePath);
-        var tree = new Tree($"[yellow]Processing:[/] [blue]{Markup.Escape(relativePath)}[/]");
+        var tree = new Tree($"[blue]{Markup.Escape(relativePath)}[/]");
 
         try
         {
@@ -230,10 +271,6 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
             {
                 await ankiClient.CreateDeckAsync(deckName);
             }
-            else
-            {
-                tree.AddNode($"[yellow][[Read-Only]][/] Would create deck '{Markup.Escape(deckName)}'.");
-            }
 
             foreach (var (header, content) in contentChunks)
             {
@@ -249,7 +286,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
                 if (cachedEntry != null && cachedEntry.DeckName != deckName && cachedEntry.ContentHash == contentHash)
                 {
-                    tree.AddNode($"[yellow]MOVED:[/] '{Markup.Escape(header)}' from deck '{Markup.Escape(cachedEntry.DeckName)}' to '{Markup.Escape(deckName)}'");
+                    tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Modified,
+                        $"{cachedEntry.DeckName} -> {deckName}"));
                     summary.NotesMoved++;
                     if (!readOnly)
                     {
@@ -266,7 +304,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 
                 if (cachedEntry != null && cachedEntry.ContentHash == contentHash)
                 {
-                    tree.AddNode($"[grey]CHECKING:[/] '{Markup.Escape(header)}' (unchanged content)");
+                    tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Unchanged));
 
                     if (cachedEntry.NoteIds.Any())
                     {
@@ -274,7 +312,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
                         if (notesInfoResult.NotFound.Any())
                         {
-                            tree.AddNode($"[red]PRUNING:[/] Detected {notesInfoResult.NotFound.Count} manually deleted notes for section '{Markup.Escape(header)}'.");
+                            tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Deleted,
+                                $"{notesInfoResult.NotFound.Count} manually deleted notes in section '{header}'"));
                             var validNoteIds = cachedEntry.NoteIds.Except(notesInfoResult.NotFound).ToList();
                             if (!readOnly)
                             {
@@ -309,6 +348,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 }
 
                 IReadOnlyCollection<Flashcard> flashcards;
+                // TODO is there a better pattern we could use here?
                 if (readOnly)
                 {
                     flashcards = new List<Flashcard> { new BasicFlashcard() };
@@ -324,7 +364,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                             flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
                             break;
                         default:
-                            AnsiConsole.MarkupLine($"[red]Unknown ai-mode: {aiMode}[/]");
+                            AnsiConsole.MarkupLine($"[red]Unknown AI mode: {aiMode}[/]");
                             continue;
                     }
                 }
@@ -347,12 +387,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                     {
                         var oldCount = cachedEntry!.NoteIds.Count;
                         var newCount = readOnly ? "some" : $"{newNoteIds.Count}";
-                        tree.AddNode($"[yellow]MODIFIED:[/] '{Markup.Escape(header)}' ({oldCount} old -> {newCount} new)");
+                        tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Modified,
+                            $"{oldCount} old -> {newCount} new"));
                     }
                     else
                     {
                         var newCount = readOnly ? "some" : $"{newNoteIds.Count}";
-                        tree.AddNode($"[green]ADDED:[/] '{Markup.Escape(header)}' ({newCount} flashcards)");
+                        tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Created,
+                            $"+{newCount} flashcards"));
                     }
                 }
                 else
@@ -363,7 +405,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                         {
                             _cache.TryRemove(cacheKey, out _);
                         }
-                        tree.AddNode($"[red]DELETED:[/] '{Markup.Escape(header)}' ({cachedEntry!.NoteIds.Count} flashcards)");
+                        tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Deleted,
+                            $"-{cachedEntry!.NoteIds.Count} flashcards"));
                     }
                     // If not wasCached and no flashcards, do nothing.
                 }

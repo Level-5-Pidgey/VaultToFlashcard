@@ -64,7 +64,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         task.StopTask();
     }
 
-    public async Task ProcessVault(string vaultPath, string aiMode, string apiKey, string model)
+    public async Task ProcessVault(string vaultPath, string apiKey, string model)
     {
         AnsiConsole.MarkupLine($"Starting vault processing at: [blue]{vaultPath}[/]");
         var cachePath = Path.Combine(vaultPath, CacheFileName);
@@ -121,7 +121,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                     {
                         try
                         {
-                            var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, aiMode, apiKey, model, vaultPath, allValidNoteIds);
+                            var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, apiKey, model, vaultPath, allValidNoteIds);
                             summary.Aggregate(fileSummary);
                             if (tree != null && relativePath != null)
                             {
@@ -233,7 +233,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         return string.Format(formattedTemplate, textColor, Markup.Escape(item), extraTextFormatted).Trim();
     }
 
-    private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath, string aiMode, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
+    private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
     {
         var summary = new ProcessingSummary();
         var relativePath = Path.GetRelativePath(vaultPath, filePath);
@@ -355,18 +355,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 }
                 else
                 {
-                    switch (aiMode)
-                    {
-                        case "cli":
-                            flashcards = await GenerateFlashcardsCliAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model);
-                            break;
-                        case "api":
-                            flashcards = await GenerateFlashcardsApiAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
-                            break;
-                        default:
-                            AnsiConsole.MarkupLine($"[red]Unknown AI mode: {aiMode}[/]");
-                            continue;
-                    }
+                    flashcards = await GenerateFlashcardsAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
                 }
 
                 if (flashcards.Any())
@@ -488,7 +477,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         return messages;
     }
     
-    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsApiAsync(string content,
+    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsAsync(string content,
         Dictionary<object, object> frontMatter, string relativePath, string fileName, string header, string model,
         string apiKey)
     {
@@ -549,81 +538,6 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         }
     }
 
-    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsCliAsync(string content,
-        Dictionary<object, object> frontMatter, string relativePath, string fileName, string header, string model)
-    {
-        var promptMessages = GetPromptMessages(content, frontMatter, relativePath, header)
-            .Select(x => x.Text);
-        var prompt = string.Join(Environment.NewLine, promptMessages);
-
-        var processStartInfo = new ProcessStartInfo
-        {
-            FileName = "gemini.cmd",
-            Arguments = $"-m \"{model}\" -o text",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8
-        };
-        
-        using var process = new Process();
-
-        process.StartInfo = processStartInfo;
-        var output = new StringBuilder();
-        var error = new StringBuilder();
-        
-        process.OutputDataReceived += (sender, args) => output.AppendLine(args.Data);
-        process.ErrorDataReceived += (sender, args) => error.AppendLine(args.Data);
-
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        await process.StandardInput.WriteAsync(prompt);
-        process.StandardInput.Close();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
-        {
-            throw new Exception($"Gemini CLI failed with exit code {process.ExitCode}: {error}");
-        }
-        
-        var fullOutput = output.ToString();
-        var jsonStart = fullOutput.IndexOf('[');
-        var jsonEnd = fullOutput.LastIndexOf(']');
-        
-        if (jsonStart == -1 || jsonEnd == -1)
-        {
-            AnsiConsole.MarkupLine($"[yellow]Warning: Could not find JSON array in the output from Gemini CLI for chunk '{Markup.Escape(header)}'. Skipping.[/]");
-            return new List<Flashcard>();
-        }
-
-        var jsonOutput = fullOutput.Substring(jsonStart, jsonEnd - jsonStart + 1);
-        var jsonOptions = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-        };
-        jsonOptions.Converters.Add(new FlashcardConverter());
-
-        try
-        {
-            var flashcards = JsonSerializer.Deserialize<List<Flashcard>>(jsonOutput, jsonOptions) ?? new List<Flashcard>();
-            foreach (var card in flashcards)
-            {
-                card.Source = string.Format(CardSourceFormat, fileName, header);
-            }
-            return flashcards;
-        }
-        catch(JsonException ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
-            return new List<Flashcard>();
-        }
-    }
-    
     private void DisplaySummary(ProcessingSummary summary)
     {
         var table = new Table()

@@ -16,7 +16,7 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 
         var apiKey = configuration["GeminiApiKey"];
 
-        if (settings.AiMode == "api" && string.IsNullOrEmpty(apiKey))
+        if (string.IsNullOrEmpty(apiKey))
         {
             AnsiConsole.MarkupLine("[red]Error: API key is not configured.[/]");
             AnsiConsole.MarkupLine("Please set the 'GeminiApiKey' in user secrets, for example:");
@@ -37,7 +37,7 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
         }
 
         var processor = new VaultProcessor(ankiClient, settings.ReadOnly);
-        await processor.ProcessVault(settings.VaultPath, settings.AiMode, apiKey ?? string.Empty, settings.Model);
+        await processor.ProcessVault(settings.VaultPath, apiKey ?? string.Empty, settings.Model);
 
         return 0;
     }

@@ -9,11 +9,6 @@ public class CommandSettings : Spectre.Console.Cli.CommandSettings
     [Description("The path to the Obsidian vault.")]
     public string VaultPath { get; set; } = string.Empty;
 
-    [CommandOption("--ai-mode <MODE>")]
-    [Description("The AI mode to use. (api, cli)")]
-    [DefaultValue("api")]
-    public string AiMode { get; set; } = "api";
-
     [CommandOption("-m|--model <MODEL>")]
     [Description("The Gemini model to use.")]
     [DefaultValue("gemini-3-flash-preview")]

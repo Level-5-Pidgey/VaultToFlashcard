@@ -45,6 +45,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
         foreach (var filePath in markdownFiles)
         {
+            task.Increment(1);
             var fileContent = await File.ReadAllTextAsync(filePath);
             var match = yamlHeaderMatch.Match(fileContent);
 
@@ -98,13 +99,12 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
             })
             .StartAsync(async ctx =>
             {
-                var analysisTask = ctx.AddTask("[green]Analyzing categories[/]");
+                var analysisTask = ctx.AddTask("[green]Analyzing categories[/]", false, markdownFiles.Count);
                 await AnalyzeAllCategoriesAsync(markdownFiles, analysisTask);
 
-                // Pre-scan: Collect all needed card types and ensure they exist
-                var preScanTask = ctx.AddTask("[green]Ensuring card types exist[/]");
-                preScanTask.StartTask();
+                var preScanTask = ctx.AddTask("[green]Ensuring card types exist[/]", true, 1);
                 await EnsureRequiredModelsExistAsync();
+                preScanTask.Increment(1);
                 preScanTask.StopTask();
 
                 var processingTask = ctx.AddTask("[green]Processing files[/]", new ProgressTaskSettings { MaxValue = markdownFiles.Count, AutoStart = false });
@@ -136,7 +136,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 processingTask.StartTask();
                 await Task.WhenAll(processingTasks);
                 
-                var cleanupTask = ctx.AddTask("[green]Cleaning up orphaned notes[/]");
+                var cleanupTask = ctx.AddTask("[green]Cleaning up orphaned notes[/]", false, 1);
                 var orphanedCount = await CleanUpOrphanedNotesAsync(allValidNoteIds, cleanupTask);
                 summary.OrphanedNotesDeleted = orphanedCount;
             });
@@ -218,7 +218,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
         if (orphanedIds.Any())
         {
-            AnsiConsole.MarkupLine($"  > Found {orphanedIds.Count} orphaned notes to delete.");
+            AnsiConsole.MarkupLine($"Found {orphanedIds.Count} orphaned notes to delete.");
             if (!readOnly)
             {
                 await ankiClient.DeleteNotesAsync(orphanedIds);
@@ -230,8 +230,9 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         }
         else
         {
-            AnsiConsole.MarkupLine("  > No orphaned notes found.");
+            AnsiConsole.MarkupLine("[SeaGreen2]No orphaned notes found.[/]");
         }
+        task.Increment(1);
         task.StopTask();
         return orphanedIds.Count;
     }

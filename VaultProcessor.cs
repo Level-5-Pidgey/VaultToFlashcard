@@ -24,7 +24,33 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
     private const string CacheFileName = ".obsidian-anki-cache.json";
-    private const string CardSourceFormat = "{0}#{1}";
+    
+    /// <summary>
+    /// Creates an Obsidian deeplink URL wrapped in an HTML anchor tag for clickable links in Anki.
+    /// Format: <a href="obsidian://open?vault={vaultName}&file={encodedFilePath}[#{encodedHeader}]">{displayText}</a>
+    /// </summary>
+    private static string CreateObsidianDeeplink(string vaultName, string relativePath, string? header = null)
+    {
+        var encodedVaultName = Uri.EscapeDataString(vaultName);
+        var encodedFilePath = Uri.EscapeDataString(relativePath);
+        
+        var deeplink = $"obsidian://open?vault={encodedVaultName}&file={encodedFilePath}";
+        
+        if (!string.IsNullOrEmpty(header))
+        {
+            var encodedHeader = Uri.EscapeDataString(header);
+            deeplink += $"#{encodedHeader}";
+        }
+        
+        // Use filename and optionally header as display text
+        var displayText = Path.GetFileName(relativePath);
+        if (!string.IsNullOrEmpty(header))
+        {
+            displayText += $" #{header}";
+        }
+        
+        return $"<a href=\"{deeplink}\">{displayText}</a>";
+    }
 
     // YAML front matter regex - compiled once for reuse
     private static readonly Regex YamlHeaderRegex = new(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
@@ -365,6 +391,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     /// Context passed to chunk processing methods to reduce parameter bloat.
     /// </summary>
     private record ChunkProcessingContext(
+        string VaultName,
         string RelativePath,
         string Header,
         string CacheKey,
@@ -428,9 +455,12 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
                 Cache.TryGetValue(cacheKey, out var cachedEntry);
 
+                // Extract vault name from vault path
+                var vaultName = Path.GetFileName(vaultPath);
+                
                 // Create context for suspend/unsuspend operations
                 var chunkContext = new ChunkProcessingContext(
-                    relativePath, header, cacheKey, contentHash, deckName, deckTags,
+                    vaultName, relativePath, header, cacheKey, contentHash, deckName, deckTags,
                     model, apiKey, promptConfig, content, tree, summary, allValidNoteIds);
 
                 // File was in Anki (cached) and now study=false -> suspend
@@ -529,7 +559,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 else
                 {
                     flashcards =
-                        await GenerateFlashcardsAsync(content, relativePath, header, model, apiKey, promptConfig);
+                        await GenerateFlashcardsAsync(content, vaultName, relativePath, header, model, apiKey, promptConfig);
                 }
 
                 if (flashcards.Any())
@@ -593,7 +623,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     {
         if (!cachedEntry.NoteIds.Any()) return;
 
-        var (relativePath, header, cacheKey, contentHash, deckName, deckTags, model, apiKey, promptConfig, content, tree
+        var (vaultName, relativePath, header, cacheKey, contentHash, deckName, deckTags, model, apiKey, promptConfig, content, tree
             , summary, allValidNoteIds) = context;
         var cardIds = await ankiClient.GetCardsForNotesAsync(cachedEntry.NoteIds);
 
@@ -633,7 +663,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 var flashcards = readOnly
                     ? (IReadOnlyCollection<DynamicFlashcard>)new List<DynamicFlashcard>
                         { new DynamicFlashcard("Basic", new()) }
-                    : await GenerateFlashcardsAsync(content, relativePath, header, model, apiKey, promptConfig);
+                    : await GenerateFlashcardsAsync(content, vaultName, relativePath, header, model, apiKey, promptConfig);
 
                 if (flashcards.Count > 0)
                 {
@@ -771,7 +801,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     }
 
     private async Task<IReadOnlyCollection<DynamicFlashcard>> GenerateFlashcardsAsync(string content,
-        string relativePath, string header, string model,
+        string vaultName, string relativePath, string header, string model,
         string apiKey, CategoryPromptConfiguration promptConfig)
     {
         using var lease = await GeminiRateLimiter.AcquireAsync();
@@ -833,7 +863,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 }
 
                 return new DynamicFlashcard(selectedCardType.ModelName, fields,
-                    string.Format(CardSourceFormat, relativePath, header));
+                    CreateObsidianDeeplink(vaultName, relativePath, header));
             }).ToArray();
         }
         catch (JsonException ex)

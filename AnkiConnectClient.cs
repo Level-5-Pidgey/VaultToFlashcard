@@ -41,25 +41,23 @@ public class AnkiConnectClient
         await PostAsync(action);
     }
 
-    public async Task<IReadOnlyCollection<long>> AddNotesAsync(IReadOnlyCollection<Flashcard> flashcards, string deckName, IReadOnlyCollection<string> tags)
+    public async Task<IReadOnlyCollection<long>> AddDynamicNotesAsync(IReadOnlyCollection<DynamicFlashcard> flashcards, string deckName, IReadOnlyCollection<string> tags)
     {
         var notes = new List<AnkiNote>();
         var allTags = new[] { "Obsidian-Generated" }
             .Concat(tags.Select(tag => tag.Replace(' ', '-')))
             .ToHashSet();
-        
+
         foreach (var card in flashcards)
         {
-            switch (card)
-            {
-                case BasicFlashcard basic:
-                    notes.Add(new AnkiNote(deckName, "Basic", new { basic.Front, basic.Back, card.Source, }, allTags));
-                    break;
-                case ClozeFlashcard cloze:
-                    notes.Add(new AnkiNote(deckName, "Cloze", new { cloze.Text, card.Source, }, allTags));
-                    break;
-            }
+            var fieldsWithSource = card.Fields.ToDictionary(
+                kvp => kvp.Key, 
+                kvp => (object)kvp.Value
+            );
+            fieldsWithSource["Source"] = card.Source;
+            notes.Add(new AnkiNote(deckName, card.ModelName, fieldsWithSource, allTags));
         }
+        
         var action = new AnkiAction("addNotes", new { notes });
         var result = await PostAsync(action);
 
@@ -127,6 +125,51 @@ public class AnkiConnectClient
             return result.EnumerateArray().Select(e => e.GetString() ?? "").ToList();
         }
         return new List<string>();
+    }
+
+    public async Task<List<string>> GetModelNamesAsync()
+    {
+        var action = new AnkiAction("modelNames", null);
+        var result = await PostAsync(action);
+        if (result.ValueKind == JsonValueKind.Array)
+        {
+            return result.EnumerateArray().Select(e => e.GetString() ?? "").ToList();
+        }
+        return new List<string>();
+    }
+
+    public async Task EnsureModelExistsAsync(string modelName, IEnumerable<string> requiredFields, bool readOnly)
+    {
+        if (readOnly)
+        {
+            AnsiConsole.MarkupLine($"[yellow][[Read-Only]][/] Would ensure model '{modelName}' exists with fields: {string.Join(", ", requiredFields)}.");
+            return;
+        }
+
+        var existingModels = await GetModelNamesAsync();
+        
+        if (!existingModels.Contains(modelName))
+        {
+            AnsiConsole.MarkupLine($"[yellow]Model '{modelName}' not found. Creating it...[/]");
+            await CreateModelAsync(modelName, requiredFields.ToList());
+        }
+        else
+        {
+            await EnsureFieldsExist(modelName, requiredFields);
+        }
+    }
+
+    private async Task CreateModelAsync(string modelName, List<string> fieldNames)
+    {
+        // Create a new note type based on "Basic" model
+        var action = new AnkiAction("createModel", new
+        {
+            modelName,
+            inOrderFields = fieldNames,
+            req = fieldNames.Select((_, i) => new object[] { i, "any", new string[] { } }).ToArray()
+        });
+        await PostAsync(action);
+        AnsiConsole.MarkupLine($"[green]Successfully created model '{modelName}' with fields: {string.Join(", ", fieldNames)}.[/]");
     }
     
     public async Task<IReadOnlyCollection<AnkiNoteInfo>> NotesInfoAsync(IReadOnlyCollection<long> noteIds)

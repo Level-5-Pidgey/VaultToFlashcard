@@ -18,10 +18,11 @@ using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
-public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
+public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, CategoryPromptRegistry? promptRegistry = null)
 {
-    private readonly CategoryAnalyzer _categoryAnalyzer = new();
-    private ConcurrentDictionary<string, CacheEntry> _cache = new();
+    private readonly CategoryAnalyzer CategoryAnalyzer = new();
+    private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
+    private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
     private const string CacheFileName = ".obsidian-anki-cache.json";
     private const string CardSourceFormat = "{0}#{1}";
@@ -56,11 +57,11 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
                 {
                     var categories = catList.Select(c => c.ToString()!).ToList();
-                    _categoryAnalyzer.Analyze(categories);
+                    CategoryAnalyzer.Analyze(categories);
                 }
             }
         }
-        _categoryAnalyzer.FinalizeAnalysis();
+        CategoryAnalyzer.FinalizeAnalysis();
         task.StopTask();
     }
 
@@ -73,17 +74,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         {
             AnsiConsole.MarkupLine("Loading cache...");
             var json = await File.ReadAllTextAsync(cachePath);
-            _cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
-        }
-
-        if (!readOnly)
-        {
-            await ankiClient.EnsureFieldsExist("Basic", new[] { "Source" });
-            await ankiClient.EnsureFieldsExist("Cloze", new[] { "Source" });
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[yellow][[Read-Only]][/] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
+            Cache = JsonSerializer.Deserialize<ConcurrentDictionary<string, CacheEntry>>(json) ?? new();
         }
 
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
@@ -109,6 +100,12 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
             {
                 var analysisTask = ctx.AddTask("[green]Analyzing categories[/]");
                 await AnalyzeAllCategoriesAsync(markdownFiles, analysisTask);
+
+                // Pre-scan: Collect all needed card types and ensure they exist
+                var preScanTask = ctx.AddTask("[green]Ensuring card types exist[/]");
+                preScanTask.StartTask();
+                await EnsureRequiredModelsExistAsync();
+                preScanTask.StopTask();
 
                 var processingTask = ctx.AddTask("[green]Processing files[/]", new ProgressTaskSettings { MaxValue = markdownFiles.Count, AutoStart = false });
                 var allValidNoteIds = new ConcurrentBag<long>();
@@ -152,7 +149,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         if (!readOnly)
         {
             AnsiConsole.MarkupLine("Saving cache...");
-            var newJson = JsonSerializer.Serialize(_cache, JsonOptions);
+            var newJson = JsonSerializer.Serialize(Cache, JsonOptions);
             await File.WriteAllTextAsync(cachePath, newJson);
         }
         else
@@ -162,6 +159,53 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
         DisplaySummary(summary);
         AnsiConsole.MarkupLine("[bold green]Vault processing complete.[/]");
+    }
+
+    private async Task EnsureRequiredModelsExistAsync()
+    {
+        if (!readOnly)
+        {
+            // Ensure Source field exists on all standard models
+            await ankiClient.EnsureFieldsExist("Basic", new[] { "Source" });
+            await ankiClient.EnsureFieldsExist("Cloze", new[] { "Source" });
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[yellow][[Read-Only]][/] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
+        }
+
+        // Get all required model names from the registry
+        var requiredModels = PromptRegistry.GetAllRequiredModelNames();
+        
+        foreach (var modelName in requiredModels)
+        {
+            // Find the card type definition for this model
+            CardTypeDefinition? cardType = null;
+            
+            // Check custom configurations
+            foreach (var config in PromptRegistry.GetAllConfiguredCategoryNames())
+            {
+                var matchedConfig = PromptRegistry.FindBestMatch(new[] { config });
+                if (matchedConfig != null)
+                {
+                    cardType = matchedConfig.CardTypes.FirstOrDefault(ct => ct.ModelName == modelName);
+                    if (cardType != null) break;
+                }
+            }
+            
+            // If not found, check default config
+            if (cardType == null)
+            {
+                var defaultConfig = PromptRegistry.GetDefaultConfiguration();
+                cardType = defaultConfig.CardTypes.FirstOrDefault(ct => ct.ModelName == modelName);
+            }
+            
+            if (cardType != null)
+            {
+                var requiredFields = cardType.JsonSchemaProperties.Keys.Append("Source").ToList();
+                await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, readOnly);
+            }
+        }
     }
 
     private async Task<int> CleanUpOrphanedNotesAsync(ConcurrentBag<long> validNoteIds, ProgressTask task)
@@ -237,7 +281,6 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
     {
         var summary = new ProcessingSummary();
         var relativePath = Path.GetRelativePath(vaultPath, filePath);
-        var tree = new Tree($"[blue]{Markup.Escape(relativePath)}[/]");
 
         try
         {
@@ -264,9 +307,24 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 return (null, null, null);
             }
             
+            // Extract note categories for prompt matching
+            var noteCategories = new List<string>();
+            if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
+            {
+                noteCategories = catList.Select(c => c.ToString()!).ToList();
+            }
+            else if (frontMatter.TryGetValue("tags", out var tags) && tags is List<object> tagList)
+            {
+                noteCategories = tagList.Select(t => t.ToString()!).ToList();
+            }
+
+            var promptConfig = PromptRegistry.FindBestMatch(noteCategories) ?? PromptRegistry.GetDefaultConfiguration();
+            var cardTypes = promptConfig.CardTypes.Select(x => x.ModelName);
+            var tree = new Tree($"[blue]{Markup.Escape(relativePath)}[/] [Grey70]({Markup.Escape(string.Join(", ", cardTypes))})[/]");
+
             var contentChunks = ParseAndSanitize(markdownContent);
 
-            var (deckName, tags) = ResolveDeckName(filePath, frontMatter);
+            var (deckName, deckTags) = ResolveDeckName(filePath, frontMatter);
             if (!readOnly)
             {
                 await ankiClient.CreateDeckAsync(deckName);
@@ -282,7 +340,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                 var cacheKey = $"{Path.GetRelativePath(vaultPath, filePath)}#{header}";
                 var contentHash = CalculateHash(content);
 
-                _cache.TryGetValue(cacheKey, out var cachedEntry);
+                Cache.TryGetValue(cacheKey, out var cachedEntry);
 
                 if (cachedEntry != null && cachedEntry.DeckName != deckName && cachedEntry.ContentHash == contentHash)
                 {
@@ -292,7 +350,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                     if (!readOnly)
                     {
                         await ankiClient.ChangeDeckAsync(cachedEntry.NoteIds, deckName);
-                        _cache[cacheKey] = cachedEntry with { DeckName = deckName };
+                        Cache[cacheKey] = cachedEntry with { DeckName = deckName };
                     }
 
                     foreach (var newNoteId in cachedEntry.NoteIds)
@@ -319,11 +377,11 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                             {
                                 if (validNoteIds.Any())
                                 {
-                                    _cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
+                                    Cache[cacheKey] = cachedEntry with { NoteIds = validNoteIds };
                                 }
                                 else
                                 {
-                                    _cache.TryRemove(cacheKey, out _);
+                                    Cache.TryRemove(cacheKey, out _);
                                 }
                             }
                         }
@@ -332,7 +390,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                         {
                             if (!readOnly)
                             {
-                                await ankiClient.MergeTagsAsync(noteInfo.NoteId, tags);
+                                await ankiClient.MergeTagsAsync(noteInfo.NoteId, deckTags);
                             }
                             allValidNoteIds.Add(noteInfo.NoteId);
                         }
@@ -347,15 +405,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                     await ankiClient.DeleteNotesAsync(cachedEntry!.NoteIds);
                 }
 
-                IReadOnlyCollection<Flashcard> flashcards;
-                // TODO is there a better pattern we could use here?
+                IReadOnlyCollection<DynamicFlashcard> flashcards;
                 if (readOnly)
                 {
-                    flashcards = new List<Flashcard> { new BasicFlashcard() };
+                    flashcards = new List<DynamicFlashcard> { new DynamicFlashcard("Basic", new Dictionary<string, string>()) };
                 }
                 else
                 {
-                    flashcards = await GenerateFlashcardsAsync(content, frontMatter, relativePath, Path.GetFileName(filePath), header, model, apiKey);
+                    flashcards = await GenerateFlashcardsAsync(content, relativePath, header, model, apiKey, promptConfig);
                 }
 
                 if (flashcards.Any())
@@ -363,9 +420,9 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                     IReadOnlyCollection<long> newNoteIds = new List<long>();
                     if (!readOnly)
                     {
-                        newNoteIds = await ankiClient.AddNotesAsync(flashcards, deckName, tags);
+                        newNoteIds = await ankiClient.AddDynamicNotesAsync(flashcards, deckName, deckTags);
                         summary.NewFlashcards += newNoteIds.Count;
-                        _cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
+                        Cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName);
                         foreach (var newNoteId in newNoteIds)
                         {
                             allValidNoteIds.Add(newNoteId);
@@ -392,7 +449,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
                     {
                         if (!readOnly)
                         {
-                            _cache.TryRemove(cacheKey, out _);
+                            Cache.TryRemove(cacheKey, out _);
                         }
                         tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Deleted,
                             $"-{cachedEntry!.NoteIds.Count} flashcards"));
@@ -420,53 +477,76 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
         var categories = catList.Select(c => c.ToString()!).ToList();
         return categories.Any() ? 
-            _categoryAnalyzer.ResolveDeckName(categories) : 
+            CategoryAnalyzer.ResolveDeckName(categories) : 
             (Path.GetFileNameWithoutExtension(filePath), new List<string>());
     }
     
-    private IReadOnlyCollection<ChatMessage> GetPromptMessages(string content, Dictionary<object, object> frontMatter, string fileName, string header)
+    private IReadOnlyCollection<ChatMessage> GetPromptMessages(string content, CategoryPromptConfiguration? config, string relativePath, string header)
     {
-        var noteCategories = "";
-        if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
-        {
-            noteCategories = string.Join(", ", catList.Select(c => c.ToString()));
-        }
-        else if (frontMatter.TryGetValue("tags", out var tags) && tags is List<object> tagList)
-        {
-            noteCategories = string.Join(", ", tagList.Select(t => t.ToString()));
-        }
-
         var containsList = Regex.IsMatch(content, @"^\s*-\s+", RegexOptions.Multiline);
 
         var systemPrompt = new StringBuilder("""
-                                             You are an Anki Instructional Designer. Create self-contained cards on the content provided using either Cloze or Basic format. Utilize HTML tags for styling. Important rules:
-                                             1. BREVITY: Ensure the facts being placed into flashcards are the most crucial parts of the text. Skip sections of text that are superfluous or not assessing a fact (e.g. opinionated).
-                                             2. NO HIDDEN CONTEXT: Use specific names; never "it" or "this".
-                                             3. ATOMICITY: One card = One discrete fact. 
-                                             4. CLOZES: Use {{c1::answer::hint}}. Clozes cards must have at *least* two -- never have a flashcard with a single cloze. Never cloze-delete the primary topic word, and only use hints if required for context.
+                                             You are an expert Anki Instructional Designer. Your goal is to transform provided text into high-quality, long-term memory flashcards. Important rules:
+                                             1. BREVITY: Capture only the "load-bearing" facts. Omit fluff, opinions, or introductory filler.
+                                             2. ATOMICITY: Each card must test exactly one discrete idea. If a section has multiple facts, create multiple cards.
+                                             3. NO HIDDEN CONTEXT: Use specific nouns. Never use "it," "this," or "they" unless the antecedent is inside the card.
+                                             4. FORMATTING: Format fields using HTML. Use <code> tags for technical terms/data and <anki_mathjax> for maths/formulae.
                                              """);
+        var systemPromptTenantNumber = 4;
 
-        var assistantPrompt = new StringBuilder("""
-                                                Examples:
-                                                - Set: [{"text": "{{c1::Canberra::city}} was founded in {{c2::1913}}"}]
-                                                - Vocab: [{"text": "{{c1::Bonjour::French}} is used for {{c2::greeting someone in the morning}}."}]
-                                                - Q&A: [{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}]
-                                                """);
+        var assistantPrompt = new StringBuilder();
+
+        // Use configuration if available, otherwise use default
+        var cardTypes = config?.CardTypes ?? PromptRegistry.GetDefaultConfiguration().CardTypes;
+
+        if (cardTypes.Any(x => x.ModelName == "Cloze"))
+        {
+            systemPromptTenantNumber++;
+            systemPrompt.AppendLine($"{systemPromptTenantNumber}. CLOZES: Use {{c1::answer::hint}}. Clozes cards must have at *least* two -- never have a flashcard with a single cloze. Never cloze-delete the primary topic word, and only use hints if required for context.");
+        }
+        
+        // Build examples from configured card types
+        foreach (var cardType in cardTypes)
+        {
+            if (!string.IsNullOrEmpty(cardType.ExampleOutput))
+            {
+                assistantPrompt.AppendLine($"- {cardType.ModelName}: [{cardType.ExampleOutput}]");
+            }
+        }
+        
+        // Add category-specific addendums
+        if (config != null && !string.IsNullOrEmpty(config.AssistantPromptAddendum))
+        {
+            assistantPrompt.AppendLine();
+            assistantPrompt.AppendLine(config.AssistantPromptAddendum);
+        }
 
         if (containsList)
         {
+            systemPromptTenantNumber++;
             systemPrompt.AppendLine(
-                "5. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
+                $"{systemPromptTenantNumber}. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
             assistantPrompt.AppendLine("""- List: [{"text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"}]""");
         }
-        
+
+        // Add system prompt addendum from config
+        if (config != null && !string.IsNullOrEmpty(config.SystemPromptAddendum))
+        {
+            systemPrompt.AppendLine();
+            systemPrompt.AppendLine(config.SystemPromptAddendum);
+        }
+
         var messages = new List<ChatMessage>
         {
             new(ChatRole.System, systemPrompt.ToString()),
-            new(ChatRole.User, $"Context: This note has the following categories: '{noteCategories}' and is titled '{fileName}'."),
         };
 
-        if (!string.Equals(Path.GetFileNameWithoutExtension(fileName), header, StringComparison.OrdinalIgnoreCase))
+        if (config != null)
+        {
+            messages.Add(new(ChatRole.User, $"Context: This note has the following categories: '{config.Category}'."));
+        }
+
+        if (!string.Equals(Path.GetFileNameWithoutExtension(relativePath), header, StringComparison.OrdinalIgnoreCase))
         {
             messages.Add(new(ChatRole.User, $"Section Name: {header}"));
         }
@@ -477,12 +557,17 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
         return messages;
     }
     
-    private async Task<IReadOnlyCollection<Flashcard>> GenerateFlashcardsAsync(string content,
-        Dictionary<object, object> frontMatter, string relativePath, string fileName, string header, string model,
-        string apiKey)
+    private async Task<IReadOnlyCollection<DynamicFlashcard>> GenerateFlashcardsAsync(string content,
+        string relativePath, string header, string model,
+        string apiKey, CategoryPromptConfiguration promptConfig)
     {
         using var lease = await GeminiRateLimiter.AcquireAsync();
-        var promptMessages = GetPromptMessages(content, frontMatter, relativePath, header);
+        
+        // Use first card type from config (could be extended to pick based on content)
+        var cardTypes = promptConfig.CardTypes;
+        var selectedCardType = cardTypes.First();
+
+        var promptMessages = GetPromptMessages(content, promptConfig, relativePath, header);
         var gemini = new GeminiChatClient(new GeminiClientOptions
         {
             ApiKey = apiKey,
@@ -499,9 +584,13 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
             .UseLogging(loggerFactory)
             .Build();
 
+        // Build JSON schema for the selected card type
+        var schema = CategoryPromptRegistry.BuildJsonSchema(selectedCardType);
+        var schemaDescription = CategoryPromptRegistry.BuildSchemaDescription(selectedCardType);
+
         var options = new ChatOptions
         {
-            ResponseFormat = ChatResponseFormat.ForJsonSchema<FlashcardTransport[]>(),
+            ResponseFormat = ChatResponseFormat.ForJsonSchema(schema, selectedCardType.ModelName, schemaDescription),
             Temperature = 0.15f,
         };
 
@@ -509,32 +598,34 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly)
 
         if (response.FinishReason != ChatFinishReason.Stop)
         {
-            AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
-            return Array.Empty<Flashcard>();
+            AnsiConsole.MarkupLine($"[red]Error generating flashcards for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
+            return Array.Empty<DynamicFlashcard>();
         }
 
         try
         {
-            var transport = JsonSerializer.Deserialize<FlashcardTransport[]>(response.Text) ?? [];
-            return transport.Select(x =>
+            var cards = JsonSerializer.Deserialize<JsonElement[]>(response.Text) ?? [];
+            return cards.Select(card =>
+            {
+                var fields = new Dictionary<string, string>();
+                
+                // Extract fields based on the schema properties
+                foreach (var prop in selectedCardType.JsonSchemaProperties.Keys)
                 {
-                    Flashcard card = x.Type switch
+                    if (card.TryGetProperty(prop, out var propValue) && propValue.ValueKind == JsonValueKind.String)
                     {
-                        FlashcardType.Basic => new BasicFlashcard(x),
-                        FlashcardType.Cloze => new ClozeFlashcard(x),
-                        _ => throw new InvalidOperationException(),
-                    };
-                    
-                    card.Source = string.Format(CardSourceFormat, fileName, header); // which is now the relative path
-                    return card;
-                })
-                .ToArray();
+                        fields[prop] = propValue.GetString() ?? "";
+                    }
+                }
+                
+                return new DynamicFlashcard(selectedCardType.ModelName, fields, string.Format(CardSourceFormat, relativePath, header));
+            }).ToArray();
         }
         catch(JsonException ex)
         {
             AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
             AnsiConsole.MarkupLine($"[red]-- Invalid JSON --[/] {Markup.Escape(response.Text)} [red]------------------[/]");
-            return new List<Flashcard>();
+            return new List<DynamicFlashcard>();
         }
     }
 

@@ -252,6 +252,32 @@ public class AnkiConnectClient
             await PostAsync(action);
         }
     }
+
+    public async Task SuspendCardsAsync(IReadOnlyCollection<long> cardIds)
+    {
+        if (!cardIds.Any()) return;
+        var action = new AnkiAction("suspend", new { cards = cardIds });
+        await PostAsync(action);
+    }
+
+    public async Task UnsuspendCardsAsync(IReadOnlyCollection<long> cardIds)
+    {
+        if (!cardIds.Any()) return;
+        var action = new AnkiAction("unsuspend", new { cards = cardIds });
+        await PostAsync(action);
+    }
+
+    public async Task<IReadOnlyCollection<long>> GetCardsForNotesAsync(IReadOnlyCollection<long> noteIds)
+    {
+        if (!noteIds.Any()) return Array.Empty<long>();
+        var action = new AnkiAction("cardsForNotes", new { notes = noteIds });
+        var result = await PostAsync(action);
+        return result.ValueKind == JsonValueKind.Array
+            ? result.EnumerateArray()
+                .Select(e => e.GetInt64())
+                .ToArray()
+            : [];
+    }
     
     
     private async Task<JsonElement> PostAsync(AnkiAction action)

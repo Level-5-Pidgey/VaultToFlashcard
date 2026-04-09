@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -26,42 +25,71 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
     private const string CacheFileName = ".obsidian-anki-cache.json";
     private const string CardSourceFormat = "{0}#{1}";
-    
+
+    // YAML front matter regex - compiled once for reuse
+    private static readonly Regex YamlHeaderRegex = new(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
+
+    private static readonly IDeserializer YamlDeserializer =
+        new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
+
+    // Color mappings for file update results
+    private static readonly Dictionary<FileUpdateType, string> UpdateResultColors = new()
+    {
+        [FileUpdateType.Unchanged] = "Grey42",
+        [FileUpdateType.Modified] = "Grey70",
+        [FileUpdateType.Deleted] = "Red3_1",
+        [FileUpdateType.Created] = "SeaGreen2",
+        [FileUpdateType.Suspended] = "DeepPink4_1",
+        [FileUpdateType.Unsuspended] = "DeepPink3_1"
+    };
+
+    private static readonly Dictionary<FileUpdateType, string> ExtraTextColors = new()
+    {
+        [FileUpdateType.Unchanged] = "Grey",
+        [FileUpdateType.Modified] = "Grey",
+        [FileUpdateType.Deleted] = "DarkRed_1",
+        [FileUpdateType.Created] = "DarkSeaGreen4_1",
+        [FileUpdateType.Suspended] = "DeepPink4",
+        [FileUpdateType.Unsuspended] = "DeepPink3"
+    };
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().Build();
+
     private static readonly FixedWindowRateLimiter GeminiRateLimiter = new(new FixedWindowRateLimiterOptions
     {
         PermitLimit = 1,
         Window = TimeSpan.FromSeconds(15),
         AutoReplenishment = true
     });
+
     private static readonly SemaphoreSlim FileProcessingSemaphore = new(10);
 
     private async Task AnalyzeAllCategoriesAsync(IEnumerable<string> markdownFiles, ProgressTask task)
     {
         task.StartTask();
-        var deserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
-        var yamlHeaderMatch = new Regex(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
 
         foreach (var filePath in markdownFiles)
         {
             task.Increment(1);
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var match = yamlHeaderMatch.Match(fileContent);
+            var parsed = TryParseYamlFrontMatter(fileContent);
 
-            if (!match.Success) continue;
+            if (parsed is null) continue;
 
-            var frontMatter = deserializer.Deserialize<Dictionary<object, object>>(match.Groups[1].Value);
+            var (frontMatter, _) = parsed.Value;
+            if (frontMatter == null) continue;
 
-            if (frontMatter.TryGetValue("study", out var studyValue) && (studyValue is bool b && b || studyValue.ToString()!.ToLower() == "true"))
+            if (EvaluateShouldStudy(frontMatter.GetValueOrDefault("study")))
             {
-                if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
+                var categories = ExtractCategories(frontMatter);
+                if (categories.Count > 0)
                 {
-                    var categories = catList.Select(c => c.ToString()!).ToList();
                     CategoryAnalyzer.Analyze(categories);
                 }
             }
         }
+
         CategoryAnalyzer.FinalizeAnalysis();
         task.StopTask();
     }
@@ -81,13 +109,13 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         var markdownFiles = Directory.EnumerateFiles(vaultPath, "*.md", SearchOption.AllDirectories)
             .Where(p => !p.Contains(CacheFileName))
             .ToList();
-        
+
         var summary = new ProcessingSummary
         {
             TotalFiles = markdownFiles.Count
         };
         var allResults = new ConcurrentBag<(string RelativePath, Tree Tree)>();
-        
+
         await AnsiConsole.Progress()
             .Columns(new ProgressColumn[]
             {
@@ -107,10 +135,11 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 preScanTask.Increment(1);
                 preScanTask.StopTask();
 
-                var processingTask = ctx.AddTask("[green]Processing files[/]", new ProgressTaskSettings { MaxValue = markdownFiles.Count, AutoStart = false });
+                var processingTask = ctx.AddTask("[green]Processing files[/]",
+                    new ProgressTaskSettings { MaxValue = markdownFiles.Count, AutoStart = false });
                 var allValidNoteIds = new ConcurrentBag<long>();
                 var processingTasks = new List<Task>();
-                
+
                 foreach (var filePath in markdownFiles)
                 {
                     await FileProcessingSemaphore.WaitAsync();
@@ -118,7 +147,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                     {
                         try
                         {
-                            var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, apiKey, model, vaultPath, allValidNoteIds);
+                            var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, apiKey, model,
+                                vaultPath, allValidNoteIds, summary);
                             summary.Aggregate(fileSummary);
                             if (tree != null && relativePath != null)
                             {
@@ -135,12 +165,12 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
                 processingTask.StartTask();
                 await Task.WhenAll(processingTasks);
-                
+
                 var cleanupTask = ctx.AddTask("[green]Cleaning up orphaned notes[/]", false, 1);
                 var orphanedCount = await CleanUpOrphanedNotesAsync(allValidNoteIds, cleanupTask);
                 summary.OrphanedNotesDeleted = orphanedCount;
             });
-        
+
         foreach (var result in allResults.OrderBy(r => r.RelativePath))
         {
             AnsiConsole.Write(result.Tree);
@@ -171,17 +201,18 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         }
         else
         {
-            AnsiConsole.MarkupLine("[yellow][[Read-Only]][/] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
+            AnsiConsole.MarkupLine(
+                "[yellow][[Read-Only]][/] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
         }
 
         // Get all required model names from the registry
         var requiredModels = PromptRegistry.GetAllRequiredModelNames();
-        
+
         foreach (var modelName in requiredModels)
         {
             // Find the card type definition for this model
             CardTypeDefinition? cardType = null;
-            
+
             // Check custom configurations
             foreach (var config in PromptRegistry.GetAllConfiguredCategoryNames())
             {
@@ -192,14 +223,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                     if (cardType != null) break;
                 }
             }
-            
+
             // If not found, check default config
             if (cardType == null)
             {
                 var defaultConfig = PromptRegistry.GetDefaultConfiguration();
                 cardType = defaultConfig.CardTypes.FirstOrDefault(ct => ct.ModelName == modelName);
             }
-            
+
             if (cardType != null)
             {
                 var requiredFields = cardType.JsonSchemaProperties.Keys.Append("Source").ToList();
@@ -212,7 +243,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     {
         task.StartTask();
         var ankiNoteIds = await ankiClient.FindAllTaggedNotesAsync();
-    
+
         var validIdSet = new HashSet<long>(validNoteIds);
         var orphanedIds = ankiNoteIds.Where(id => !validIdSet.Contains(id)).ToList();
 
@@ -232,6 +263,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         {
             AnsiConsole.MarkupLine("[SeaGreen2]No orphaned notes found.[/]");
         }
+
         task.Increment(1);
         task.StopTask();
         return orphanedIds.Count;
@@ -243,90 +275,143 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         Modified = 1,
         Deleted = 2,
         Created = 3,
+        Suspended = 4,
+        Unsuspended = 5,
     }
 
-    private static string
-        GetFileUpdateResultString(string item, FileUpdateType fileUpdateType, string? extraText = null)
+    private static string GetFileUpdateResultString(string item, FileUpdateType fileUpdateType,
+        string? extraText = null)
     {
         const string formattedTemplate = "[{0}]{1}[/] {2}";
-        var textColor = fileUpdateType switch
+
+        if (!UpdateResultColors.TryGetValue(fileUpdateType, out var textColor))
         {
-            FileUpdateType.Unchanged => "Grey42",
-            FileUpdateType.Modified => "Grey70",
-            FileUpdateType.Deleted => "Red3_1",
-            FileUpdateType.Created => "SeaGreen2",
-            _ => throw new ArgumentOutOfRangeException(nameof(fileUpdateType), fileUpdateType, extraText)
-        };
+            throw new ArgumentOutOfRangeException(nameof(fileUpdateType), fileUpdateType, extraText);
+        }
 
         var extraTextFormatted = string.Empty;
-        if (extraText is not null)
+        if (extraText is not null && extraText.Length > 0)
         {
-            var extraTextColor = fileUpdateType switch
-            {
-                FileUpdateType.Unchanged => "Grey",
-                FileUpdateType.Modified => "Grey",
-                FileUpdateType.Deleted => "DarkRed_1",
-                FileUpdateType.Created => "DarkSeaGreen4_1",
-                _ => throw new ArgumentOutOfRangeException(nameof(fileUpdateType), fileUpdateType, extraText)
-            };
-                
-            extraTextFormatted = extraText.Length > 0 ? 
-                $"[{extraTextColor}]({Markup.Escape(extraText)})[/]" : 
-                string.Empty;
+            var extraTextColor = ExtraTextColors.TryGetValue(fileUpdateType, out var color)
+                ? color
+                : "Grey";
+            extraTextFormatted = $"[{extraTextColor}]({Markup.Escape(extraText)})[/]";
         }
 
         return string.Format(formattedTemplate, textColor, Markup.Escape(item), extraTextFormatted).Trim();
     }
 
-    private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath, string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds)
+    #region Helper Methods
+
+    /// <summary>
+    /// Parses YAML front matter from markdown file content.
+    /// Returns a tuple with: (frontMatter, markdownContent) or (null, null) if no front matter found.
+    /// </summary>
+    private (Dictionary<object, object>? FrontMatter, string MarkdownContent)? TryParseYamlFrontMatter(
+        string fileContent)
     {
-        var summary = new ProcessingSummary();
+        var match = YamlHeaderRegex.Match(fileContent);
+        if (!match.Success) return null;
+
+        var yamlContent = match.Groups[1].Value;
+        var markdownContent = fileContent.Substring(match.Length);
+        var frontMatter = YamlDeserializer.Deserialize<Dictionary<object, object>>(yamlContent);
+
+        return (frontMatter, markdownContent);
+    }
+
+    /// <summary>
+    /// Extracts categories from front matter, trying 'categories' first, then falling back to 'tags'.
+    /// </summary>
+    private static List<string> ExtractCategories(Dictionary<object, object> frontMatter)
+    {
+        if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
+        {
+            return catList.Select(c => c.ToString()!).ToList();
+        }
+
+        if (frontMatter.TryGetValue("tags", out var tags) && tags is List<object> tagList)
+        {
+            return tagList.Select(t => t.ToString()!).ToList();
+        }
+
+        return new List<string>();
+    }
+
+    /// <summary>
+    /// Evaluates if the 'study' front matter value indicates the note should be studied.
+    /// </summary>
+    private static bool EvaluateShouldStudy(object? studyValue)
+    {
+        if (studyValue is null) return false;
+        if (studyValue is bool b) return b;
+        return studyValue.ToString()?.ToLower() == "true";
+    }
+
+    /// <summary>
+    /// Adds note IDs to a concurrent bag. Helper to reduce repetition.
+    /// </summary>
+    private static void AddNoteIdsToBag(ConcurrentBag<long> bag, IEnumerable<long> noteIds)
+    {
+        foreach (var noteId in noteIds)
+        {
+            bag.Add(noteId);
+        }
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Context passed to chunk processing methods to reduce parameter bloat.
+    /// </summary>
+    private record ChunkProcessingContext(
+        string RelativePath,
+        string Header,
+        string CacheKey,
+        string ContentHash,
+        string DeckName,
+        IReadOnlyCollection<string> DeckTags,
+        string Model,
+        string ApiKey,
+        CategoryPromptConfiguration PromptConfig,
+        string Content,
+        Tree Tree,
+        ProcessingSummary Summary,
+        ConcurrentBag<long> AllValidNoteIds
+    );
+
+    private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath,
+        string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds, ProcessingSummary summary)
+    {
         var relativePath = Path.GetRelativePath(vaultPath, filePath);
 
         try
         {
             var fileContent = await File.ReadAllTextAsync(filePath);
-            var yamlHeaderMatch = new Regex(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
-            var match = yamlHeaderMatch.Match(fileContent);
+            var parsed = TryParseYamlFrontMatter(fileContent);
 
-            if (!match.Success) return (null, null, null);
+            if (parsed is null) return (null, null, null);
 
-            var yamlContent = match.Groups[1].Value;
-            var markdownContent = fileContent.Substring(match.Length); 
-
-            var deserializer = new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
-            var frontMatter = deserializer.Deserialize<Dictionary<object, object>>(yamlContent);
+            var (frontMatter, markdownContent) = parsed.Value;
+            if (frontMatter == null) return (null, null, null);
 
             if (!frontMatter.TryGetValue("study", out var studyValue))
             {
                 return (null, null, null);
             }
 
-            var shouldStudy = studyValue switch { true => true, "true" => true, _ => false };
-            if (!shouldStudy)
-            {
-                return (null, null, null);
-            }
-            
-            // Extract note categories for prompt matching
-            var noteCategories = new List<string>();
-            if (frontMatter.TryGetValue("categories", out var cats) && cats is List<object> catList)
-            {
-                noteCategories = catList.Select(c => c.ToString()!).ToList();
-            }
-            else if (frontMatter.TryGetValue("tags", out var tags) && tags is List<object> tagList)
-            {
-                noteCategories = tagList.Select(t => t.ToString()!).ToList();
-            }
+            var shouldStudy = EvaluateShouldStudy(studyValue);
+            var noteCategories = ExtractCategories(frontMatter);
 
             var promptConfig = PromptRegistry.FindBestMatch(noteCategories) ?? PromptRegistry.GetDefaultConfiguration();
             var cardTypes = promptConfig.CardTypes.Select(x => x.ModelName);
-            var tree = new Tree($"[blue]{Markup.Escape(relativePath)}[/] [Grey70]({Markup.Escape(string.Join(", ", cardTypes))})[/]");
+            var tree = new Tree(
+                $"[blue]{Markup.Escape(relativePath)}[/] [Grey70]({Markup.Escape(string.Join(", ", cardTypes))})[/]");
 
             var contentChunks = ParseAndSanitize(markdownContent);
 
             var (deckName, deckTags) = ResolveDeckName(filePath, frontMatter);
-            if (!readOnly)
+            if (!readOnly && shouldStudy)
             {
                 await ankiClient.CreateDeckAsync(deckName);
             }
@@ -343,6 +428,32 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
                 Cache.TryGetValue(cacheKey, out var cachedEntry);
 
+                // Create context for suspend/unsuspend operations
+                var chunkContext = new ChunkProcessingContext(
+                    relativePath, header, cacheKey, contentHash, deckName, deckTags,
+                    model, apiKey, promptConfig, content, tree, summary, allValidNoteIds);
+
+                // File was in Anki (cached) and now study=false -> suspend
+                if (cachedEntry != null && !shouldStudy)
+                {
+                    await HandleSuspendStateChangeAsync(cachedEntry, chunkContext, unsuspend: false);
+                    continue;
+                }
+
+                // File was never in Anki and study=false
+                if (cachedEntry == null && !shouldStudy)
+                {
+                    continue;
+                }
+
+                // At this point, shouldStudy = true
+                // Handle suspended notes being re-activated -> unsuspend
+                if (cachedEntry != null && cachedEntry.IsSuspendedState)
+                {
+                    await HandleSuspendStateChangeAsync(cachedEntry, chunkContext, unsuspend: true);
+                    continue;
+                }
+
                 if (cachedEntry != null && cachedEntry.DeckName != deckName && cachedEntry.ContentHash == contentHash)
                 {
                     tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Modified,
@@ -358,9 +469,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                     {
                         allValidNoteIds.Add(newNoteId);
                     }
+
                     continue;
                 }
-                
+
                 if (cachedEntry != null && cachedEntry.ContentHash == contentHash)
                 {
                     tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Unchanged));
@@ -393,9 +505,11 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                             {
                                 await ankiClient.MergeTagsAsync(noteInfo.NoteId, deckTags);
                             }
+
                             allValidNoteIds.Add(noteInfo.NoteId);
                         }
                     }
+
                     continue;
                 }
 
@@ -409,11 +523,13 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 IReadOnlyCollection<DynamicFlashcard> flashcards;
                 if (readOnly)
                 {
-                    flashcards = new List<DynamicFlashcard> { new DynamicFlashcard("Basic", new Dictionary<string, string>()) };
+                    flashcards = new List<DynamicFlashcard>
+                        { new DynamicFlashcard("Basic", new Dictionary<string, string>()) };
                 }
                 else
                 {
-                    flashcards = await GenerateFlashcardsAsync(content, relativePath, header, model, apiKey, promptConfig);
+                    flashcards =
+                        await GenerateFlashcardsAsync(content, relativePath, header, model, apiKey, promptConfig);
                 }
 
                 if (flashcards.Any())
@@ -452,13 +568,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                         {
                             Cache.TryRemove(cacheKey, out _);
                         }
+
                         tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Deleted,
                             $"-{cachedEntry!.NoteIds.Count} flashcards"));
                     }
                     // If not wasCached and no flashcards, do nothing.
                 }
             }
-            
+
             return (summary, tree, relativePath);
         }
         catch (Exception ex)
@@ -469,7 +586,98 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         }
     }
 
-    private (string DeckName, IReadOnlyCollection<string> Tags) ResolveDeckName(string filePath, Dictionary<object, object> frontMatter)
+    private async Task HandleSuspendStateChangeAsync(
+        CacheEntry cachedEntry,
+        ChunkProcessingContext context,
+        bool unsuspend)
+    {
+        if (!cachedEntry.NoteIds.Any()) return;
+
+        var (relativePath, header, cacheKey, contentHash, deckName, deckTags, model, apiKey, promptConfig, content, tree
+            , summary, allValidNoteIds) = context;
+        var cardIds = await ankiClient.GetCardsForNotesAsync(cachedEntry.NoteIds);
+
+        if (unsuspend)
+        {
+            // Handle unsuspend - either just unsuspend or delete and recreate
+            if (cachedEntry.ContentHash == contentHash)
+            {
+                // Content unchanged - just unsuspend
+                if (!readOnly && cardIds.Any())
+                {
+                    await ankiClient.UnsuspendCardsAsync(cardIds);
+                    Cache[cacheKey] = cachedEntry with { IsSuspended = false };
+                    summary.NotesUnsuspended++;
+                }
+
+                tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Unsuspended,
+                    $"unsuspended {cachedEntry.NoteIds.Count} cards"));
+                AddNoteIdsToBag(allValidNoteIds, cachedEntry.NoteIds);
+
+                if (!readOnly)
+                {
+                    foreach (var noteId in cachedEntry.NoteIds)
+                    {
+                        await ankiClient.MergeTagsAsync(noteId, deckTags);
+                    }
+                }
+            }
+            else
+            {
+                // Content changed - delete old and create new
+                if (!readOnly)
+                {
+                    await ankiClient.DeleteNotesAsync(cachedEntry.NoteIds);
+                }
+
+                var flashcards = readOnly
+                    ? (IReadOnlyCollection<DynamicFlashcard>)new List<DynamicFlashcard>
+                        { new DynamicFlashcard("Basic", new()) }
+                    : await GenerateFlashcardsAsync(content, relativePath, header, model, apiKey, promptConfig);
+
+                if (flashcards.Count > 0)
+                {
+                    if (!readOnly)
+                    {
+                        var newNoteIds = await ankiClient.AddDynamicNotesAsync(flashcards, deckName, deckTags);
+                        summary.NewFlashcards += newNoteIds.Count;
+                        Cache[cacheKey] = new CacheEntry(contentHash, newNoteIds, deckName, IsSuspended: false);
+                        summary.NotesUnsuspended++;
+                        AddNoteIdsToBag(allValidNoteIds, newNoteIds);
+                    }
+                    else
+                    {
+                        AddNoteIdsToBag(allValidNoteIds, Array.Empty<long>());
+                    }
+
+                    tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Modified,
+                        $"content changed, {cachedEntry.NoteIds.Count} old -> {(readOnly ? "some" : flashcards.Count.ToString())} new (unsuspended)"));
+                }
+                else
+                {
+                    if (!readOnly) Cache.TryRemove(cacheKey, out _);
+                    tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Deleted,
+                        "content changed, no flashcards generated"));
+                }
+            }
+        }
+        else
+        {
+            // Handle suspend
+            if (!readOnly && cardIds.Any())
+            {
+                await ankiClient.SuspendCardsAsync(cardIds);
+                Cache[cacheKey] = cachedEntry with { IsSuspended = true };
+                summary.NotesSuspended++;
+            }
+
+            tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Suspended,
+                $"suspended {cachedEntry.NoteIds.Count} cards"));
+        }
+    }
+
+    private (string DeckName, IReadOnlyCollection<string> Tags) ResolveDeckName(string filePath,
+        Dictionary<object, object> frontMatter)
     {
         if (!frontMatter.TryGetValue("categories", out var cats) || cats is not List<object> catList)
         {
@@ -477,12 +685,13 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         }
 
         var categories = catList.Select(c => c.ToString()!).ToList();
-        return categories.Any() ? 
-            CategoryAnalyzer.ResolveDeckName(categories) : 
-            (Path.GetFileNameWithoutExtension(filePath), new List<string>());
+        return categories.Any()
+            ? CategoryAnalyzer.ResolveDeckName(categories)
+            : (Path.GetFileNameWithoutExtension(filePath), new List<string>());
     }
-    
-    private IReadOnlyCollection<ChatMessage> GetPromptMessages(string content, CategoryPromptConfiguration? config, string relativePath, string header)
+
+    private IReadOnlyCollection<ChatMessage> GetPromptMessages(string content, CategoryPromptConfiguration? config,
+        string relativePath, string header)
     {
         var containsList = Regex.IsMatch(content, @"^\s*-\s+", RegexOptions.Multiline);
 
@@ -503,9 +712,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         if (cardTypes.Any(x => x.ModelName == "Cloze"))
         {
             systemPromptTenantNumber++;
-            systemPrompt.AppendLine($"{systemPromptTenantNumber}. CLOZES: Use {{c1::answer::hint}}. Clozes cards must have at *least* two -- never have a flashcard with a single cloze. Never cloze-delete the primary topic word, and only use hints if required for context.");
+            systemPrompt.AppendLine(
+                $"{systemPromptTenantNumber}. CLOZES: Use {{c1::answer::hint}}. Clozes cards must have at *least* two -- never have a flashcard with a single cloze. Never cloze-delete the primary topic word, and only use hints if required for context.");
         }
-        
+
         // Build examples from configured card types
         foreach (var cardType in cardTypes)
         {
@@ -514,7 +724,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 assistantPrompt.AppendLine($"- {cardType.ModelName}: [{cardType.ExampleOutput}]");
             }
         }
-        
+
         // Add category-specific addendums
         if (config != null && !string.IsNullOrEmpty(config.AssistantPromptAddendum))
         {
@@ -527,7 +737,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
             systemPromptTenantNumber++;
             systemPrompt.AppendLine(
                 $"{systemPromptTenantNumber}. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
-            assistantPrompt.AppendLine("""- List: [{"text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"}]""");
+            assistantPrompt.AppendLine(
+                """- List: [{"text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"}]""");
         }
 
         // Add system prompt addendum from config
@@ -553,17 +764,18 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         }
 
         messages.Add(new(ChatRole.Assistant, assistantPrompt.ToString()));
-        messages.Add(new (ChatRole.User, $@"Content to convert:\n{content}\n\nTask: Create atomic Anki flashcards from this content."));
-        
+        messages.Add(new(ChatRole.User,
+            $@"Content to convert:\n{content}\n\nTask: Create atomic Anki flashcards from this content."));
+
         return messages;
     }
-    
+
     private async Task<IReadOnlyCollection<DynamicFlashcard>> GenerateFlashcardsAsync(string content,
         string relativePath, string header, string model,
         string apiKey, CategoryPromptConfiguration promptConfig)
     {
         using var lease = await GeminiRateLimiter.AcquireAsync();
-        
+
         // Use first card type from config (could be extended to pick based on content)
         var cardTypes = promptConfig.CardTypes;
         var selectedCardType = cardTypes.First();
@@ -599,7 +811,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
         if (response.FinishReason != ChatFinishReason.Stop)
         {
-            AnsiConsole.MarkupLine($"[red]Error generating flashcards for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
+            AnsiConsole.MarkupLine(
+                $"[red]Error generating flashcards for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
             return Array.Empty<DynamicFlashcard>();
         }
 
@@ -609,7 +822,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
             return cards.Select(card =>
             {
                 var fields = new Dictionary<string, string>();
-                
+
                 // Extract fields based on the schema properties
                 foreach (var prop in selectedCardType.JsonSchemaProperties.Keys)
                 {
@@ -618,14 +831,17 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                         fields[prop] = propValue.GetString() ?? "";
                     }
                 }
-                
-                return new DynamicFlashcard(selectedCardType.ModelName, fields, string.Format(CardSourceFormat, relativePath, header));
+
+                return new DynamicFlashcard(selectedCardType.ModelName, fields,
+                    string.Format(CardSourceFormat, relativePath, header));
             }).ToArray();
         }
-        catch(JsonException ex)
+        catch (JsonException ex)
         {
-            AnsiConsole.MarkupLine($"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
-            AnsiConsole.MarkupLine($"[red]-- Invalid JSON --[/] {Markup.Escape(response.Text)} [red]------------------[/]");
+            AnsiConsole.MarkupLine(
+                $"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
+            AnsiConsole.MarkupLine(
+                $"[red]-- Invalid JSON --[/] {Markup.Escape(response.Text)} [red]------------------[/]");
             return new List<DynamicFlashcard>();
         }
     }
@@ -639,6 +855,8 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
             .AddRow("Files Processed", summary.FilesProcessed.ToString())
             .AddRow("New Flashcards", summary.NewFlashcards.ToString())
             .AddRow("Notes Moved", summary.NotesMoved.ToString())
+            .AddRow("Notes Suspended", summary.NotesSuspended.ToString())
+            .AddRow("Notes Unsuspended", summary.NotesUnsuspended.ToString())
             .AddRow("Orphaned Notes Deleted", summary.OrphanedNotesDeleted.ToString());
 
         AnsiConsole.Write(
@@ -658,7 +876,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     {
         var document = Markdown.Parse(markdownContent, Pipeline);
         var chunks = new Dictionary<string, string>();
-        
+
         var lastHeading = "Prologue";
         var content = new System.Text.StringBuilder();
 
@@ -671,6 +889,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                     chunks[lastHeading] = content.ToString().Trim();
                     content.Clear();
                 }
+
                 lastHeading = ExtractText(heading).Trim();
             }
             else
@@ -686,13 +905,14 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
         return chunks;
     }
+
     private string ExtractText(MarkdownObject obj)
     {
         var sb = new System.Text.StringBuilder();
         ExtractTextRecursive(obj, sb);
-        
+
         var content = sb.ToString();
-        
+
         content = Regex.Replace(content, @"\[\[(?:.*[|/])?(.*?)\]\]", "$1");
 
         return content;
@@ -701,20 +921,22 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     private void ExtractTextRecursive(MarkdownObject? obj, System.Text.StringBuilder sb)
     {
         if (obj is null) return;
-        
+
         switch (obj)
         {
             case HeadingBlock heading:
                 if (heading.Inline != null)
                 {
-                    foreach(var inline in heading.Inline) ExtractTextRecursive(inline, sb);
+                    foreach (var inline in heading.Inline) ExtractTextRecursive(inline, sb);
                 }
+
                 break;
             case ParagraphBlock paragraph:
                 if (paragraph.Inline != null)
                 {
                     foreach (var inline in paragraph.Inline) ExtractTextRecursive(inline, sb);
                 }
+
                 sb.AppendLine();
                 break;
             case FencedCodeBlock fencedCodeBlock:
@@ -726,6 +948,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                         sb.AppendLine(line.ToString());
                     }
                 }
+
                 sb.AppendLine("```");
                 break;
             case EmphasisInline emphasis:
@@ -736,7 +959,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 sb.Append(content);
                 break;
             case LineBreakInline:
-                if(sb.Length > 0 && sb[^1] != ' ') sb.AppendLine();
+                if (sb.Length > 0 && sb[^1] != ' ') sb.AppendLine();
                 break;
             case CodeInline codeInline:
                 sb.Append(codeInline.Content);
@@ -750,7 +973,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 break;
             case ThematicBreakBlock:
             case HtmlBlock:
-                
+
                 break;
             case ContainerBlock container:
                 foreach (var child in container) ExtractTextRecursive(child, sb);
@@ -763,7 +986,19 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 }
 
 public record CacheEntry(
-    [property: JsonPropertyName("contentHash")] string ContentHash,
-    [property: JsonPropertyName("noteIds")] IReadOnlyCollection<long> NoteIds,
-    [property: JsonPropertyName("deckName")] string DeckName
-);
+    [property: JsonPropertyName("contentHash")]
+    string ContentHash,
+    [property: JsonPropertyName("noteIds")]
+    IReadOnlyCollection<long> NoteIds,
+    [property: JsonPropertyName("deckName")]
+    string DeckName,
+    [property: JsonPropertyName("isSuspended")]
+    bool? IsSuspended = null
+)
+{
+    /// <summary>
+    /// Returns true if this entry represents a suspended note.
+    /// Null IsSuspended is treated as false for backward compatibility with older cache entries.
+    /// </summary>
+    public bool IsSuspendedState => IsSuspended ?? false;
+}

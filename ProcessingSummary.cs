@@ -6,6 +6,8 @@ public class ProcessingSummary
     public int NewFlashcards { get; set; }
     public int NotesMoved { get; set; }
     public int OrphanedNotesDeleted { get; set; }
+    public int NotesSuspended { get; set; }
+    public int NotesUnsuspended { get; set; }
     public int TotalFiles { get; set; }
     
     private readonly object _lock = new();

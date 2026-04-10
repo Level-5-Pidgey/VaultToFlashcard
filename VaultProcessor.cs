@@ -388,23 +388,26 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
     #endregion
 
     /// <summary>
-    /// Context passed to chunk processing methods to reduce parameter bloat.
+    /// Per-file context: stable data that doesn't change across chunks.
     /// </summary>
-    private record ChunkProcessingContext(
+    private record FileProcessingContext(
         string VaultName,
         string RelativePath,
-        string Header,
-        string CacheKey,
-        string ContentHash,
         string DeckName,
         IReadOnlyCollection<string> DeckTags,
         string Model,
         string ApiKey,
-        CategoryPromptConfiguration PromptConfig,
+        CategoryPromptConfiguration PromptConfig
+    );
+
+    /// <summary>
+    /// Per-chunk context: data that varies for each content chunk within a file.
+    /// </summary>
+    private record ChunkProcessingContext(
+        string Header,
         string Content,
-        Tree Tree,
-        ProcessingSummary Summary,
-        ConcurrentBag<long> AllValidNoteIds
+        string CacheKey,
+        string ContentHash
     );
 
     private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath,
@@ -457,16 +460,16 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
                 // Extract vault name from vault path
                 var vaultName = Path.GetFileName(vaultPath);
-                
-                // Create context for suspend/unsuspend operations
-                var chunkContext = new ChunkProcessingContext(
-                    vaultName, relativePath, header, cacheKey, contentHash, deckName, deckTags,
-                    model, apiKey, promptConfig, content, tree, summary, allValidNoteIds);
+
+                // Create contexts for suspend/unsuspend operations
+                var fileContext = new FileProcessingContext(
+                    vaultName, relativePath, deckName, deckTags, model, apiKey, promptConfig);
+                var chunkContext = new ChunkProcessingContext(header, content, cacheKey, contentHash);
 
                 // File was in Anki (cached) and now study=false -> suspend
                 if (cachedEntry != null && !shouldStudy)
                 {
-                    await HandleSuspendStateChangeAsync(cachedEntry, chunkContext, unsuspend: false);
+                    await HandleSuspendStateChangeAsync(cachedEntry, fileContext, chunkContext, tree, summary, allValidNoteIds, unsuspend: false);
                     continue;
                 }
 
@@ -480,7 +483,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 // Handle suspended notes being re-activated -> unsuspend
                 if (cachedEntry != null && cachedEntry.IsSuspendedState)
                 {
-                    await HandleSuspendStateChangeAsync(cachedEntry, chunkContext, unsuspend: true);
+                    await HandleSuspendStateChangeAsync(cachedEntry, fileContext, chunkContext, tree, summary, allValidNoteIds, unsuspend: true);
                     continue;
                 }
 
@@ -559,7 +562,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 else
                 {
                     flashcards =
-                        await GenerateFlashcardsAsync(content, vaultName, relativePath, header, model, apiKey, promptConfig);
+                        await GenerateFlashcardsAsync(chunkContext, fileContext);
                 }
 
                 if (flashcards.Any())
@@ -618,13 +621,25 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
     private async Task HandleSuspendStateChangeAsync(
         CacheEntry cachedEntry,
-        ChunkProcessingContext context,
+        FileProcessingContext fileContext,
+        ChunkProcessingContext chunkContext,
+        Tree tree,
+        ProcessingSummary summary,
+        ConcurrentBag<long> allValidNoteIds,
         bool unsuspend)
     {
         if (!cachedEntry.NoteIds.Any()) return;
 
-        var (vaultName, relativePath, header, cacheKey, contentHash, deckName, deckTags, model, apiKey, promptConfig, content, tree
-            , summary, allValidNoteIds) = context;
+        var header = chunkContext.Header;
+        var cacheKey = chunkContext.CacheKey;
+        var contentHash = chunkContext.ContentHash;
+        var content = chunkContext.Content;
+        var deckName = fileContext.DeckName;
+        var deckTags = fileContext.DeckTags;
+        var vaultName = fileContext.VaultName;
+        var model = fileContext.Model;
+        var apiKey = fileContext.ApiKey;
+        var promptConfig = fileContext.PromptConfig;
         var cardIds = await ankiClient.GetCardsForNotesAsync(cachedEntry.NoteIds);
 
         if (unsuspend)
@@ -663,7 +678,7 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
                 var flashcards = readOnly
                     ? (IReadOnlyCollection<DynamicFlashcard>)new List<DynamicFlashcard>
                         { new DynamicFlashcard("Basic", new()) }
-                    : await GenerateFlashcardsAsync(content, vaultName, relativePath, header, model, apiKey, promptConfig);
+                    : await GenerateFlashcardsAsync(chunkContext, fileContext);
 
                 if (flashcards.Count > 0)
                 {
@@ -800,11 +815,19 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
         return messages;
     }
 
-    private async Task<IReadOnlyCollection<DynamicFlashcard>> GenerateFlashcardsAsync(string content,
-        string vaultName, string relativePath, string header, string model,
-        string apiKey, CategoryPromptConfiguration promptConfig)
+    private async Task<IReadOnlyCollection<DynamicFlashcard>> GenerateFlashcardsAsync(
+        ChunkProcessingContext chunkContext,
+        FileProcessingContext fileContext)
     {
         using var lease = await GeminiRateLimiter.AcquireAsync();
+
+        var content = chunkContext.Content;
+        var header = chunkContext.Header;
+        var promptConfig = fileContext.PromptConfig;
+        var relativePath = fileContext.RelativePath;
+        var apiKey = fileContext.ApiKey;
+        var model = fileContext.Model;
+        var vaultName = fileContext.VaultName;
 
         // Use first card type from config (could be extended to pick based on content)
         var cardTypes = promptConfig.CardTypes;

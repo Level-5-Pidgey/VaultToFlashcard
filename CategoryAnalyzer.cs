@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text.RegularExpressions;
 
 namespace VaultToFlashcard;
 
@@ -133,12 +132,8 @@ public partial class CategoryAnalyzer
 	{
 		if (string.IsNullOrEmpty(category)) return string.Empty;
 
-		var match = WikiLinkRegex().Match(category);
+		var match = RegexPatterns.WikiLinkRegex().Match(category);
 
 		return match.Success ? match.Groups[1].Value.Trim() : category.Trim();
 	}
-
-	// TODO move this to a common location as it's used in the other files as well
-	[GeneratedRegex(@"\[\[(?:.*[|/])?(.*?)\]\]")]
-	private static partial Regex WikiLinkRegex();
 }

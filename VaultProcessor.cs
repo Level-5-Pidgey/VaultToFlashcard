@@ -17,7 +17,7 @@ using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
-public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, CategoryPromptRegistry? promptRegistry = null)
+public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, CategoryPromptRegistry? promptRegistry = null)
 {
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
 	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
@@ -48,9 +48,6 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 
 		return $"<a href=\"{deeplink}\">{displayText}</a>";
 	}
-
-	// YAML front matter regex - compiled once for reuse
-	private static readonly Regex YamlHeaderRegex = new(@"^---\s*(.*?)---\s*", RegexOptions.Singleline);
 
 	private static readonly IDeserializer YamlDeserializer =
 		new DeserializerBuilder().IgnoreUnmatchedProperties().Build();
@@ -316,10 +313,10 @@ public class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, Categor
 	/// Parses YAML front matter from markdown file content.
 	/// Returns a tuple with: (frontMatter, markdownContent) or (null, null) if no front matter found.
 	/// </summary>
-	private (Dictionary<object, object>? FrontMatter, string MarkdownContent)? TryParseYamlFrontMatter(
+	private static (Dictionary<object, object>? FrontMatter, string MarkdownContent)? TryParseYamlFrontMatter(
 		string fileContent)
 	{
-		var match = YamlHeaderRegex.Match(fileContent);
+		var match = RegexPatterns.YamlHeaderRegex().Match(fileContent);
 		if (!match.Success) return null;
 
 		var yamlContent = match.Groups[1].Value;

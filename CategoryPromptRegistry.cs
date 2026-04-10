@@ -5,133 +5,123 @@ namespace VaultToFlashcard;
 
 public class CategoryPromptRegistry
 {
-    private readonly List<CategoryPromptConfiguration> _configurations = new();
-    
-    private static readonly CategoryPromptConfiguration DefaultConfiguration = new()
-    {
-        Category = "Default",
-        Priority = -1,
-        SystemPromptAddendum = "",
-        AssistantPromptAddendum = "",
-        CardTypes = new List<CardTypeDefinition>
-        {
-            new()
-            {
-                ModelName = "Basic",
-                JsonSchemaProperties = new Dictionary<string, string>
-                {
-                    ["front"] = "The question or prompt for the front of the card",
-                    ["back"] = "The answer for the back of the card"
-                },
-                ExampleOutput = """{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}"""
-            },
-            new()
-            {
-                ModelName = "Cloze",
-                JsonSchemaProperties = new Dictionary<string, string>
-                {
-                    ["text"] = "Content with cloze deletions using {{c1::answer::hint}} format. Must have at least two clozes."
-                },
-                ExampleOutput = """{"text": "The three main concurrency primitives in Go are: {{c1::Goroutines::lightweight threads}}, {{c2::Channels::communication mechanism}}, and {{c3::Select Statement::multiplexing mechanism}}"}"""
-            }
-        }
-    };
+	private readonly List<CategoryPromptConfiguration> _configurations = new();
 
-    public CategoryPromptRegistry(IEnumerable<CategoryPromptConfiguration>? configurations = null)
-    {
-        if (configurations != null)
-        {
-            _configurations.AddRange(configurations);
-        }
-    }
+	private static readonly CategoryPromptConfiguration DefaultConfiguration = new()
+	{
+		Category = "Default",
+		Priority = -1,
+		SystemPromptAddendum = "",
+		AssistantPromptAddendum = "",
+		CardTypes = new List<CardTypeDefinition>
+		{
+			new()
+			{
+				ModelName = "Basic",
+				JsonSchemaProperties = new Dictionary<string, string>
+				{
+					["front"] = "The question or prompt for the front of the card",
+					["back"] = "The answer for the back of the card"
+				},
+				ExampleOutput =
+					"""{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}"""
+			},
+			new()
+			{
+				ModelName = "Cloze",
+				JsonSchemaProperties = new Dictionary<string, string>
+				{
+					["text"] =
+						"Content with cloze deletions using {{c1::answer::hint}} format. Must have at least two clozes."
+				},
+				ExampleOutput =
+					"""{"text": "The three main concurrency primitives in Go are: {{c1::Goroutines::lightweight threads}}, {{c2::Channels::communication mechanism}}, and {{c3::Select Statement::multiplexing mechanism}}"}"""
+			}
+		}
+	};
 
-    public CategoryPromptConfiguration GetDefaultConfiguration() => DefaultConfiguration;
+	public CategoryPromptRegistry(IEnumerable<CategoryPromptConfiguration>? configurations = null)
+	{
+		if (configurations != null) _configurations.AddRange(configurations);
+	}
 
-    public CategoryPromptConfiguration? FindBestMatch(IReadOnlyCollection<string>? noteCategories)
-    {
-        if (noteCategories == null || !noteCategories.Any())
-        {
-            return null;
-        }
+	public CategoryPromptConfiguration GetDefaultConfiguration()
+	{
+		return DefaultConfiguration;
+	}
 
-        var matchedConfigs = new List<CategoryPromptConfiguration>();
+	public CategoryPromptConfiguration? FindBestMatch(IReadOnlyCollection<string>? noteCategories)
+	{
+		if (noteCategories == null || !noteCategories.Any()) return null;
 
-        foreach (var noteCat in noteCategories)
-        {
-            var config = _configurations
-                .FirstOrDefault(c => c.Category.Equals(noteCat, StringComparison.OrdinalIgnoreCase));
+		var matchedConfigs = new List<CategoryPromptConfiguration>();
 
-            if (config != null)
-            {
-                matchedConfigs.Add(config);
-            }
-        }
+		foreach (var noteCat in noteCategories)
+		{
+			var config = _configurations
+				.FirstOrDefault(c => c.Category.Equals(noteCat, StringComparison.OrdinalIgnoreCase));
 
-        // Return highest priority match
-        return matchedConfigs
-            .OrderByDescending(c => c.Priority)
-            .FirstOrDefault();
-    }
+			if (config != null) matchedConfigs.Add(config);
+		}
 
-    public IReadOnlyCollection<string> GetAllConfiguredCategoryNames() => 
-        _configurations.Select(c => c.Category).ToList();
+		// Return highest priority match
+		return matchedConfigs
+			.OrderByDescending(c => c.Priority)
+			.FirstOrDefault();
+	}
 
-    public IReadOnlyCollection<string> GetAllRequiredModelNames()
-    {
-        var models = new HashSet<string>();
-        
-        // Add from custom configurations
-        foreach (var config in _configurations)
-        {
-            foreach (var cardType in config.CardTypes)
-            {
-                models.Add(cardType.ModelName);
-            }
-        }
-        
-        // Add from default configuration
-        foreach (var cardType in DefaultConfiguration.CardTypes)
-        {
-            models.Add(cardType.ModelName);
-        }
+	public IReadOnlyCollection<string> GetAllConfiguredCategoryNames()
+	{
+		return _configurations.Select(c => c.Category).ToList();
+	}
 
-        return models;
-    }
+	public IReadOnlyCollection<string> GetAllRequiredModelNames()
+	{
+		var models = new HashSet<string>();
 
-    public static JsonElement BuildJsonSchema(CardTypeDefinition cardType)
-    {
-        var schemaObj = new Dictionary<string, object>
-        {
-            ["type"] = "object",
-            ["properties"] = BuildProperties(cardType.JsonSchemaProperties),
-            ["required"] = cardType.JsonSchemaProperties.Keys.ToList()
-        };
+		// Add from custom configurations
+		foreach (var config in _configurations)
+		foreach (var cardType in config.CardTypes)
+			models.Add(cardType.ModelName);
 
-        var json = JsonSerializer.Serialize(schemaObj);
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.Clone();
-    }
+		// Add from default configuration
+		foreach (var cardType in DefaultConfiguration.CardTypes) models.Add(cardType.ModelName);
 
-    private static JsonElement BuildProperties(Dictionary<string, string> properties)
-    {
-        var propsObj = new Dictionary<string, object>();
-        foreach (var (key, description) in properties)
-        {
-            propsObj[key] = new Dictionary<string, string>
-            {
-                ["type"] = "string",
-                ["description"] = description
-            };
-        }
+		return models;
+	}
 
-        var json = JsonSerializer.Serialize(propsObj);
-        using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.Clone();
-    }
+	public static JsonElement BuildJsonSchema(CardTypeDefinition cardType)
+	{
+		var schemaObj = new Dictionary<string, object>
+		{
+			["type"] = "object",
+			["properties"] = BuildProperties(cardType.JsonSchemaProperties),
+			["required"] = cardType.JsonSchemaProperties.Keys.ToList()
+		};
 
-    public static string BuildSchemaDescription(CardTypeDefinition cardType)
-    {
-        var fieldList = string.Join(", ", cardType.JsonSchemaProperties.Keys);
-        return $"Anki {cardType.ModelName} card with fields: {fieldList}";
-    }
+		var json = JsonSerializer.Serialize(schemaObj);
+		using var doc = JsonDocument.Parse(json);
+		return doc.RootElement.Clone();
+	}
+
+	private static JsonElement BuildProperties(Dictionary<string, string> properties)
+	{
+		var propsObj = new Dictionary<string, object>();
+		foreach (var (key, description) in properties)
+			propsObj[key] = new Dictionary<string, string>
+			{
+				["type"] = "string",
+				["description"] = description
+			};
+
+		var json = JsonSerializer.Serialize(propsObj);
+		using var doc = JsonDocument.Parse(json);
+		return doc.RootElement.Clone();
+	}
+
+	public static string BuildSchemaDescription(CardTypeDefinition cardType)
+	{
+		var fieldList = string.Join(", ", cardType.JsonSchemaProperties.Keys);
+		return $"Anki {cardType.ModelName} card with fields: {fieldList}";
+	}
 }

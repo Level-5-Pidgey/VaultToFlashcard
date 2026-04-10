@@ -5,30 +5,25 @@ namespace VaultToFlashcard;
 
 public class CardTypeDefinition
 {
-    [JsonPropertyName("modelName")]
-    public string ModelName { get; set; } = "";
+	[JsonPropertyName("modelName")] public string ModelName { get; set; } = "";
 
-    [JsonPropertyName("jsonSchemaProperties")]
-    public Dictionary<string, string> JsonSchemaProperties { get; set; } = new();
+	[JsonPropertyName("jsonSchemaProperties")]
+	public Dictionary<string, string> JsonSchemaProperties { get; set; } = new();
 
-    [JsonPropertyName("exampleOutput")]
-    public string ExampleOutput { get; set; } = "";
+	[JsonPropertyName("exampleOutput")] public string ExampleOutput { get; set; } = "";
 }
 
 public class CategoryPromptConfiguration
 {
-    [JsonPropertyName("category")]
-    public string Category { get; set; } = "";
+	[JsonPropertyName("category")] public string Category { get; set; } = "";
 
-    [JsonPropertyName("priority")]
-    public int Priority { get; set; } = 0;
+	[JsonPropertyName("priority")] public int Priority { get; set; } = 0;
 
-    [JsonPropertyName("systemPromptAddendum")]
-    public string SystemPromptAddendum { get; set; } = "";
+	[JsonPropertyName("systemPromptAddendum")]
+	public string SystemPromptAddendum { get; set; } = "";
 
-    [JsonPropertyName("assistantPromptAddendum")]
-    public string AssistantPromptAddendum { get; set; } = "";
+	[JsonPropertyName("assistantPromptAddendum")]
+	public string AssistantPromptAddendum { get; set; } = "";
 
-    [JsonPropertyName("cardTypes")]
-    public List<CardTypeDefinition> CardTypes { get; set; } = new();
+	[JsonPropertyName("cardTypes")] public List<CardTypeDefinition> CardTypes { get; set; } = new();
 }

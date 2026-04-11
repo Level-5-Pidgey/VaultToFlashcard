@@ -18,13 +18,14 @@ using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
-public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, CategoryPromptRegistry? promptRegistry = null, ILogger? logger = null)
+public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, string skipToken = "SKIP_TOKEN", CategoryPromptRegistry? promptRegistry = null, ILogger? logger = null)
 {
 	private readonly ILogger? _logger = logger;
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
 	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
 	private readonly MediaExtractor MediaExtractor = new();
 	private readonly MediaMerger MediaMerger = new();
+	private readonly string _skipToken;
 	private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
 	private const string CacheFileName = ".obsidian-anki-cache.json";

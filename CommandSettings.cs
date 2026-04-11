@@ -26,4 +26,9 @@ public class CommandSettings : Spectre.Console.Cli.CommandSettings
 	[CommandOption("--assets <ASSETS_PATH>")]
 	[Description("Custom path to the Obsidian vault's assets folder (defaults to {vault}/assets/ and {vault}/admin/assets/).")]
 	public string? AssetsPath { get; set; }
+
+	[CommandOption("--skip-token <TOKEN>")]
+	[Description("Token within %% comment blocks that marks a section to exclude from flashcard generation.")]
+	[DefaultValue("SKIP_TOKEN")]
+	public string SkipToken { get; set; } = "SKIP_TOKEN";
 }

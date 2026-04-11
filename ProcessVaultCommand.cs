@@ -65,7 +65,7 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 		}
 
 		var processor = new VaultProcessor(ankiClient, settings.ReadOnly, promptRegistry);
-		await processor.ProcessVault(settings.VaultPath, apiKey ?? string.Empty, settings.Model);
+		await processor.ProcessVault(settings.VaultPath, apiKey ?? string.Empty, settings.Model, settings.AssetsPath);
 
 		return 0;
 	}

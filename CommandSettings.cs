@@ -22,4 +22,8 @@ public class CommandSettings : Spectre.Console.Cli.CommandSettings
 	[CommandOption("-c|--config <CONFIG_PATH>")]
 	[Description("Path to a JSON configuration file for category-specific prompts.")]
 	public string? ConfigPath { get; set; }
+
+	[CommandOption("--assets <ASSETS_PATH>")]
+	[Description("Custom path to the Obsidian vault's assets folder (defaults to {vault}/assets/ and {vault}/admin/assets/).")]
+	public string? AssetsPath { get; set; }
 }

@@ -25,7 +25,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
 	private readonly MediaExtractor MediaExtractor = new();
 	private readonly MediaMerger MediaMerger = new();
-	private readonly string _skipToken;
+	private readonly string _skipToken = skipToken;
 	private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
 	private const string CacheFileName = ".obsidian-anki-cache.json";
@@ -427,6 +427,13 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 			foreach (var (header, content) in contentChunks)
 			{
 				if (string.IsNullOrWhiteSpace(content)) continue;
+
+				// Check if section contains skip token
+				if (_skipToken != null && content.Contains(_skipToken))
+				{
+					tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Unchanged, "skipped (skip token)"));
+					continue;
+				}
 
 				var cacheKey = $"{Path.GetRelativePath(vaultPath, filePath)}#{header}";
 				var contentHash = CalculateHash(content);

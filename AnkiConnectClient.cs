@@ -56,7 +56,23 @@ public class AnkiConnectClient
 				kvp => (object)kvp.Value
 			);
 			fieldsWithSource["Source"] = card.Source;
-			notes.Add(new AnkiNote(deckName, card.ModelName, fieldsWithSource, allTags));
+
+			var audio = card.Media
+				.Where(m => m.Type == MediaType.Audio)
+				.Select(m => new AnkiMediaEntry(m.Filename, m.Data, m.Url, m.Path, m.SkipHash, m.Fields))
+				.ToList();
+
+			var picture = card.Media
+				.Where(m => m.Type == MediaType.Picture)
+				.Select(m => new AnkiMediaEntry(m.Filename, m.Data, m.Url, m.Path, m.SkipHash, m.Fields))
+				.ToList();
+
+			var video = card.Media
+				.Where(m => m.Type == MediaType.Video)
+				.Select(m => new AnkiMediaEntry(m.Filename, m.Data, m.Url, m.Path, m.SkipHash, m.Fields))
+				.ToList();
+
+			notes.Add(new AnkiNote(deckName, card.ModelName, fieldsWithSource, allTags, audio, picture, video));
 		}
 
 		var action = new AnkiAction("addNotes", new { notes });
@@ -334,7 +350,19 @@ public record AnkiNote(
 	[property: JsonPropertyName("modelName")]
 	string ModelName,
 	[property: JsonPropertyName("fields")] object Fields,
-	[property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags
+	[property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags,
+	[property: JsonPropertyName("audio")] List<AnkiMediaEntry>? Audio = null,
+	[property: JsonPropertyName("picture")] List<AnkiMediaEntry>? Picture = null,
+	[property: JsonPropertyName("video")] List<AnkiMediaEntry>? Video = null
+);
+
+public record AnkiMediaEntry(
+	[property: JsonPropertyName("filename")] string Filename,
+	[property: JsonPropertyName("data")] string? Data,
+	[property: JsonPropertyName("url")] string? Url,
+	[property: JsonPropertyName("path")] string? Path,
+	[property: JsonPropertyName("skipHash")] string? SkipHash,
+	[property: JsonPropertyName("fields")] string[] Fields
 );
 
 public record AnkiNoteInfo(

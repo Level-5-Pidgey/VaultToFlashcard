@@ -21,6 +21,8 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 {
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
 	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
+	private readonly MediaExtractor MediaExtractor = new();
+	private readonly MediaMerger MediaMerger = new();
 	private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
 	private const string CacheFileName = ".obsidian-anki-cache.json";
@@ -111,7 +113,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		task.StopTask();
 	}
 
-	public async Task ProcessVault(string vaultPath, string apiKey, string model)
+	public async Task ProcessVault(string vaultPath, string apiKey, string model, string? assetsPath)
 	{
 		AnsiConsole.MarkupLine($"Starting vault processing at: [blue]{vaultPath}[/]");
 		var cachePath = Path.Combine(vaultPath, CacheFileName);
@@ -166,7 +168,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 						try
 						{
 							var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, apiKey, model,
-								vaultPath, allValidNoteIds, summary);
+								vaultPath, assetsPath, allValidNoteIds, summary);
 							summary.Aggregate(fileSummary);
 							if (tree != null && relativePath != null) allResults.Add((relativePath, tree));
 						}
@@ -365,6 +367,8 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 	/// </summary>
 	private record FileProcessingContext(
 		string VaultName,
+		string VaultPath,
+		string AssetsPath,
 		string RelativePath,
 		string DeckName,
 		IReadOnlyCollection<string> DeckTags,
@@ -384,7 +388,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 	);
 
 	private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath,
-		string apiKey, string model, string vaultPath, ConcurrentBag<long> allValidNoteIds, ProcessingSummary summary)
+		string apiKey, string model, string vaultPath, string? assetsPath, ConcurrentBag<long> allValidNoteIds, ProcessingSummary summary)
 	{
 		var relativePath = Path.GetRelativePath(vaultPath, filePath);
 
@@ -427,7 +431,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 
 				// Create contexts for suspend/unsuspend operations
 				var fileContext = new FileProcessingContext(
-					vaultName, relativePath, deckName, deckTags, model, apiKey, promptConfig);
+					vaultName, vaultPath, assetsPath ?? string.Empty, relativePath, deckName, deckTags, model, apiKey, promptConfig);
 				var chunkContext = new ChunkProcessingContext(header, content, cacheKey, contentHash);
 
 				// File was in Anki (cached) and now study=false -> suspend
@@ -752,7 +756,12 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		var cardTypes = promptConfig.CardTypes;
 		var selectedCardType = cardTypes.First();
 
-		var promptMessages = GetPromptMessages(content, promptConfig, relativePath, header);
+		// Extract media from content before sending to AI
+		var extracted = MediaExtractor.Extract(content, fileContext.VaultPath, fileContext.AssetsPath);
+		var cleanedContent = extracted.CleanedContent;
+		var mediaItems = extracted.Media;
+
+		var promptMessages = GetPromptMessages(cleanedContent, promptConfig, relativePath, header);
 		var gemini = new GeminiChatClient(new GeminiClientOptions
 		{
 			ApiKey = apiKey,
@@ -791,7 +800,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		try
 		{
 			var cards = JsonSerializer.Deserialize<JsonElement[]>(response.Text) ?? [];
-			return cards.Select(card =>
+			var result = cards.Select(card =>
 			{
 				var fields = new Dictionary<string, string>();
 
@@ -802,7 +811,14 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 
 				return new DynamicFlashcard(selectedCardType.ModelName, fields,
 					CreateObsidianDeeplink(vaultName, relativePath, header));
-			}).ToArray();
+			}).ToList();
+
+			if (mediaItems.Count > 0)
+			{
+				MediaMerger.Merge(result, mediaItems);
+			}
+
+			return result;
 		}
 		catch (JsonException ex)
 		{

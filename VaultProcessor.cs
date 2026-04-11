@@ -8,6 +8,7 @@ using System.Threading.RateLimiting;
 using GeminiDotnet;
 using GeminiDotnet.Extensions.AI;
 using Markdig;
+using Markdig.Renderers;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Microsoft.Extensions.AI;
@@ -17,8 +18,9 @@ using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
-public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, CategoryPromptRegistry? promptRegistry = null)
+public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, CategoryPromptRegistry? promptRegistry = null, ILogger? logger = null)
 {
+	private readonly ILogger? _logger = logger;
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
 	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
 	private readonly MediaExtractor MediaExtractor = new();
@@ -86,6 +88,10 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 	});
 
 	private static readonly SemaphoreSlim FileProcessingSemaphore = new(10);
+
+	private static readonly Regex WikilinkHtmlRegex = new(
+		@"\[\[(?:.*[|/])?(.*?)\]\]",
+		RegexOptions.Compiled);
 
 	private async Task AnalyzeAllCategoriesAsync(IEnumerable<string> markdownFiles, ProgressTask task)
 	{
@@ -675,7 +681,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		                                     1. BREVITY: Capture only the "load-bearing" facts. Omit fluff, opinions, or introductory filler.
 		                                     2. ATOMICITY: Each card must test exactly one discrete idea. If a section has multiple facts, create multiple cards.
 		                                     3. NO HIDDEN CONTEXT: Use specific nouns. Never use "it," "this," or "they" unless the antecedent is inside the card.
-		                                     4. FORMATTING: Format fields using HTML. Use <code> tags for technical terms/data and <anki_mathjax> for maths/formulae.
+		                                     4. FORMATTING: Format fields using HTML. Use <code> tags for technical terms/data and <anki_mathjax> for maths/formulae. Respect <code>, <em>, <strong>, <ul>, <li>, <table> tags when extracting facts.
 		                                     """);
 		var systemPromptTenantNumber = 4;
 
@@ -877,7 +883,10 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 			}
 			else
 			{
-				content.Append(ExtractText(block));
+				var html = ExtractHtml(block);
+				if (string.IsNullOrEmpty(html)) continue;
+				html = WikilinkHtmlRegex.Replace(html, "$1");
+				content.Append(html);
 			}
 
 		if (content.Length > 0) chunks[lastHeading] = content.ToString().Trim();
@@ -895,6 +904,22 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		content = Regex.Replace(content, @"\[\[(?:.*[|/])?(.*?)\]\]", "$1");
 
 		return content;
+	}
+
+	private string ExtractHtml(MarkdownObject obj)
+	{
+		try
+		{
+			using var writer = new StringWriter();
+			var renderer = new HtmlRenderer(writer);
+			renderer.Write(obj);
+			return writer.ToString();
+		}
+		catch (Exception ex)
+		{
+			_logger?.LogWarning(ex, "Markdig HTML conversion failed, falling back to plain text");
+			return ExtractText(obj); // Don't apply regex here - ParseAndSanitize will do it
+		}
 	}
 
 	private void ExtractTextRecursive(MarkdownObject? obj, StringBuilder sb)

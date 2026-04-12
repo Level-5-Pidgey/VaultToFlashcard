@@ -33,8 +33,11 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.InvalidFields, Does.Contain("text"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.InvalidFields, Does.Contain("text"));
+        });
     }
 
     [Test]
@@ -49,8 +52,11 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.InvalidFields, Does.Contain("front"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.InvalidFields, Does.Contain("front"));
+        });
     }
 
     [Test]
@@ -65,8 +71,11 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.MissingFields, Does.Contain("text"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.MissingFields, Does.Contain("text"));
+        });
     }
 
     [Test]
@@ -81,9 +90,12 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.MissingFields, Does.Contain("front"));
-        Assert.That(result.MissingFields, Does.Contain("back"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.MissingFields, Does.Contain("front"));
+            Assert.That(result.MissingFields, Does.Contain("back"));
+        });
     }
 
     [Test]
@@ -98,10 +110,13 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.MissingFields, Does.Contain("back"));
-        Assert.That(result.MissingFields, Does.Not.Contain("front"));
-        Assert.That(result.MissingFields, Does.Not.Contain("tags"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.MissingFields, Does.Contain("back"));
+            Assert.That(result.MissingFields, Does.Not.Contain("front"));
+            Assert.That(result.MissingFields, Does.Not.Contain("tags"));
+        });
     }
 
     [Test]
@@ -116,11 +131,14 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.InvalidFields, Does.Contain("Front"));
-        Assert.That(result.InvalidFields, Does.Contain("Back"));
-        Assert.That(result.MissingFields, Does.Contain("front"));
-        Assert.That(result.MissingFields, Does.Contain("back"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.InvalidFields, Does.Contain("Front"));
+            Assert.That(result.InvalidFields, Does.Contain("Back"));
+            Assert.That(result.MissingFields, Does.Contain("front"));
+            Assert.That(result.MissingFields, Does.Contain("back"));
+        });
     }
 
     [Test]
@@ -135,9 +153,12 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.False);
-        Assert.That(result.InvalidFields, Does.Contain("extra1"));
-        Assert.That(result.InvalidFields, Does.Contain("extra2"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.False);
+            Assert.That(result.InvalidFields, Does.Contain("extra1"));
+            Assert.That(result.InvalidFields, Does.Contain("extra2"));
+        });
     }
 
     [Test]
@@ -152,8 +173,11 @@ public class CardValidationTests
 
         var result = CardValidation.ValidateCard(cardType, cardJson);
 
-        Assert.That(result.IsValid, Is.True);
-        Assert.That(result.InvalidFields, Is.Empty);
-        Assert.That(result.MissingFields, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.IsValid, Is.True);
+            Assert.That(result.InvalidFields, Is.Empty);
+            Assert.That(result.MissingFields, Is.Empty);
+        });
     }
 }

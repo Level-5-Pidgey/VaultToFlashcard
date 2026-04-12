@@ -9,64 +9,88 @@ public class RegexPatternsTests
     public void WikiLinkRegex_SimpleLink_CapturesLink()
     {
         var match = RegexPatterns.WikiLinkRegex().Match("[[link]]");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("link"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("link"));
+        });
     }
 
     [Test]
     public void WikiLinkRegex_LinkWithAlias_CapturesLinkNotAlias()
     {
         var match = RegexPatterns.WikiLinkRegex().Match("[[alias|link]]");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("link"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("link"));
+        });
     }
 
     [Test]
     public void WikiLinkRegex_PathWithSlashes_CapturesLastSegment()
     {
         var match = RegexPatterns.WikiLinkRegex().Match("[[path/to/file]]");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("file"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("file"));
+        });
     }
 
     [Test]
     public void WikiLinkRegex_MultiplePipes_CapturesLastSegment()
     {
         var match = RegexPatterns.WikiLinkRegex().Match("[[a|b|c]]");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("c"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("c"));
+        });
     }
 
     [Test]
     public void WikiLinkRegex_EmptyBrackets_ReturnsEmptyMatch()
     {
         var match = RegexPatterns.WikiLinkRegex().Match("[[]]");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.Empty);
+        });
     }
 
     [Test]
     public void YamlHeaderRegex_FrontMatterWithContent_CapturesContent()
     {
         var match = RegexPatterns.YamlHeaderRegex().Match("---\nkey: value\n---\ncontent");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("key: value\n"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("key: value\n"));
+        });
     }
 
     [Test]
     public void YamlHeaderRegex_FrontMatterOnly_CapturesContent()
     {
         var match = RegexPatterns.YamlHeaderRegex().Match("---\nfoo: bar\n---");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("foo: bar\n"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("foo: bar\n"));
+        });
     }
 
     [Test]
     public void YamlHeaderRegex_MultilineFrontMatter_CapturesBetweenDelimiters()
     {
         var match = RegexPatterns.YamlHeaderRegex().Match("---\nmultiline\n---\n");
-        Assert.That(match.Success, Is.True);
-        Assert.That(match.Groups[1].Value, Is.EqualTo("multiline\n"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(match.Success, Is.True);
+            Assert.That(match.Groups[1].Value, Is.EqualTo("multiline\n"));
+        });
     }
 
     [Test]

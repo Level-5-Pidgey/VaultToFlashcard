@@ -76,20 +76,20 @@ public partial class MediaExtractor
         return new ExtractionResult(content, mediaItems);
     }
 
-    private static string ExtractFilenameFromUrl(string url)
+    internal static string ExtractFilenameFromUrl(string url)
     {
         var uri = new Uri(url);
         return Path.GetFileName(uri.LocalPath);
     }
 
-    private static bool IsImageUrl(string url)
+    internal static bool IsImageUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
         var ext = Path.GetExtension(uri.LocalPath).ToLowerInvariant();
         return ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".svg" or ".bmp";
     }
 
-    private static MediaType? DetermineMediaType(string filename)
+    internal static MediaType? DetermineMediaType(string filename)
     {
         var ext = Path.GetExtension(filename).ToLowerInvariant();
         return ext switch
@@ -101,7 +101,7 @@ public partial class MediaExtractor
         };
     }
 
-    private static (string? filePath, string? data, string? skipHash) ResolveLocalFile(
+    internal static (string? filePath, string? data, string? skipHash) ResolveLocalFile(
         string filename, string vaultPath, string? customAssetsPath)
     {
         var searchPaths = new List<string>();

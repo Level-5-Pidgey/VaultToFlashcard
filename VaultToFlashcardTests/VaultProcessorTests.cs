@@ -39,9 +39,12 @@ public class VaultProcessorTests
 		// Use Item1/Item2 - ValueTuple doesn't preserve named fields at runtime
 		dynamic result = TryParseYamlFrontMatterMethod.Invoke(null, new object[] { content })!;
 
-		Assert.That(result.Item1, Is.Not.Null);
-		Assert.That(result.Item1["categories"], Is.TypeOf<List<object>>());
-		Assert.That(result.Item2.Trim(), Is.EqualTo("Some content here"));
+		Assert.Multiple(() =>
+		{
+			Assert.That(result.Item1, Is.Not.Null);
+			Assert.That(result.Item1["categories"], Is.TypeOf<List<object>>());
+			Assert.That(result.Item2.Trim(), Is.EqualTo("Some content here"));
+		});
 	}
 
 	[Test]
@@ -116,8 +119,11 @@ public class VaultProcessorTests
 
 		var result = (List<string>)ExtractCategoriesMethod.Invoke(null, new object[] { frontMatter })!;
 
-		Assert.That(result, Is.EqualTo(new List<string> { "cat1", "cat2" }));
-		Assert.That(result, Does.Not.Contains("tag1"));
+		Assert.Multiple(() =>
+		{
+			Assert.That(result, Is.EqualTo(new List<string> { "cat1", "cat2" }));
+			Assert.That(result, Does.Not.Contains("tag1"));
+		});
 	}
 
 	[Test]
@@ -198,10 +204,13 @@ public class VaultProcessorTests
 	[Test]
 	public void EvaluateShouldStudy_OtherStrings_ReturnsFalse()
 	{
-		Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "maybe" }), Is.False);
-		Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "TRUE" }), Is.True); // case insensitive
-		Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "true" }), Is.True);
-		Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "1" }), Is.False);
+		Assert.Multiple(() =>
+		{
+			Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "maybe" }), Is.False);
+			Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "TRUE" }), Is.True); // case insensitive
+			Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "true" }), Is.True);
+			Assert.That(EvaluateShouldStudyMethod.Invoke(null, new object[] { "1" }), Is.False);
+		});
 	}
 
 	#endregion

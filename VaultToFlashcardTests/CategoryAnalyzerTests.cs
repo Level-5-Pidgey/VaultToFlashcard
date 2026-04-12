@@ -7,59 +7,76 @@ namespace VaultToFlashcardTests;
 
 public class CategoryAnalyzerTests
 {
+    private static readonly MethodInfo GetPowerSetMethod;
+    private static readonly MethodInfo CleanCategoryMethod;
+
+    static CategoryAnalyzerTests()
+    {
+        var type = typeof(CategoryAnalyzer);
+        GetPowerSetMethod = type.GetMethod("GetPowerSet", BindingFlags.NonPublic | BindingFlags.Static)!;
+        CleanCategoryMethod = type.GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static)!;
+    }
+
     #region GetPowerSet Tests
 
     [Test]
     public void GetPowerSet_ZeroElements_ReturnsSingleEmptySet()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("GetPowerSet", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = ((IEnumerable<HashSet<string>>)method!.Invoke(null, [new HashSet<string>()])!).ToList();
+        var result = ((IEnumerable<HashSet<string>>)GetPowerSetMethod.Invoke(null, [new HashSet<string>()])!).ToList();
 
-        Assert.That(result, Has.Count.EqualTo(1));
-        Assert.That(result[0], Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Has.Count.EqualTo(1));
+            Assert.That(result[0], Is.Empty);
+        });
     }
 
     [Test]
     public void GetPowerSet_OneElement_ReturnsTwoSubsets()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("GetPowerSet", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = ((IEnumerable<HashSet<string>>)method!.Invoke(null, [new HashSet<string> { "A" }])!).ToList();
+        var result = ((IEnumerable<HashSet<string>>)GetPowerSetMethod.Invoke(null, [new HashSet<string> { "A" }])!).ToList();
 
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result.Count(s => s.Count == 0), Is.EqualTo(1));
-        Assert.That(result.Count(s => s.Count == 1 && s.Contains("A")), Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Has.Count.EqualTo(2));
+            Assert.That(result.Count(s => s.Count == 0), Is.EqualTo(1));
+            Assert.That(result.Count(s => s.Count == 1 && s.Contains("A")), Is.EqualTo(1));
+        });
     }
 
     [Test]
     public void GetPowerSet_TwoElements_ReturnsFourSubsets()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("GetPowerSet", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = ((IEnumerable<HashSet<string>>)method!.Invoke(null, [new HashSet<string> { "A", "B" }])!).ToList();
+        var result = ((IEnumerable<HashSet<string>>)GetPowerSetMethod.Invoke(null, [new HashSet<string> { "A", "B" }])!).ToList();
 
-        Assert.That(result, Has.Count.EqualTo(4));
-        Assert.That(result.Count(s => s.Count == 0), Is.EqualTo(1));
-        Assert.That(result.Count(s => s.Count == 1), Is.EqualTo(2));
-        Assert.That(result.Count(s => s.Count == 2), Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Has.Count.EqualTo(4));
+            Assert.That(result.Count(s => s.Count == 0), Is.EqualTo(1));
+            Assert.That(result.Count(s => s.Count == 1), Is.EqualTo(2));
+            Assert.That(result.Count(s => s.Count == 2), Is.EqualTo(1));
+        });
     }
 
     [Test]
     public void GetPowerSet_ThreeElements_ReturnsEightSubsets()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("GetPowerSet", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = ((IEnumerable<HashSet<string>>)method!.Invoke(null, [new HashSet<string> { "A", "B", "C" }])!).ToList();
+        var result = ((IEnumerable<HashSet<string>>)GetPowerSetMethod.Invoke(null, [new HashSet<string> { "A", "B", "C" }])!).ToList();
 
-        Assert.That(result, Has.Count.EqualTo(8));
-        Assert.That(result.Count(s => s.Count == 0), Is.EqualTo(1));
-        Assert.That(result.Count(s => s.Count == 1), Is.EqualTo(3));
-        Assert.That(result.Count(s => s.Count == 2), Is.EqualTo(3));
-        Assert.That(result.Count(s => s.Count == 3), Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Has.Count.EqualTo(8));
+            Assert.That(result.Count(s => s.Count == 0), Is.EqualTo(1));
+            Assert.That(result.Count(s => s.Count == 1), Is.EqualTo(3));
+            Assert.That(result.Count(s => s.Count == 2), Is.EqualTo(3));
+            Assert.That(result.Count(s => s.Count == 3), Is.EqualTo(1));
+        });
     }
 
     [Test]
     public void GetPowerSet_NoDuplicates()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("GetPowerSet", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = ((IEnumerable<HashSet<string>>)method!.Invoke(null, [new HashSet<string> { "A", "B", "C" }])!).ToList();
+        var result = ((IEnumerable<HashSet<string>>)GetPowerSetMethod.Invoke(null, [new HashSet<string> { "A", "B", "C" }])!).ToList();
 
         var distinct = result.Distinct(HashSet<string>.CreateSetComparer()).ToList();
         Assert.That(result, Has.Count.EqualTo(distinct.Count));
@@ -72,8 +89,7 @@ public class CategoryAnalyzerTests
     [Test]
     public void CleanCategory_SimpleCategory_ReturnsAsIs()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = (string)method!.Invoke(null, ["simple"])!;
+        var result = (string)CleanCategoryMethod.Invoke(null, ["simple"])!;
 
         Assert.That(result, Is.EqualTo("simple"));
     }
@@ -81,8 +97,7 @@ public class CategoryAnalyzerTests
     [Test]
     public void CleanCategory_WikiLinkSimple_ExtractsContent()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = (string)method!.Invoke(null, ["[[link]]"])!;
+        var result = (string)CleanCategoryMethod.Invoke(null, ["[[link]]"])!;
 
         Assert.That(result, Is.EqualTo("link"));
     }
@@ -90,8 +105,7 @@ public class CategoryAnalyzerTests
     [Test]
     public void CleanCategory_WikiLinkWithAlias_ExtractsLinkPart()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = (string)method!.Invoke(null, ["[[alias|link]]"])!;
+        var result = (string)CleanCategoryMethod.Invoke(null, ["[[alias|link]]"])!;
 
         Assert.That(result, Is.EqualTo("link"));
     }
@@ -99,8 +113,7 @@ public class CategoryAnalyzerTests
     [Test]
     public void CleanCategory_WikiLinkWithSlash_ExtractsCorrectPortion()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = (string)method!.Invoke(null, ["[[path/to]]"])!;
+        var result = (string)CleanCategoryMethod.Invoke(null, ["[[path/to]]"])!;
 
         // Regex extracts content after last | or /
         Assert.That(result, Is.EqualTo("to"));
@@ -109,8 +122,7 @@ public class CategoryAnalyzerTests
     [Test]
     public void CleanCategory_Null_ReturnsEmpty()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = (string)method!.Invoke(null, [null!])!;
+        var result = (string)CleanCategoryMethod.Invoke(null, [null!])!;
 
         Assert.That(result, Is.EqualTo(""));
     }
@@ -118,8 +130,7 @@ public class CategoryAnalyzerTests
     [Test]
     public void CleanCategory_EmptyString_ReturnsEmpty()
     {
-        var method = typeof(CategoryAnalyzer).GetMethod("CleanCategory", BindingFlags.NonPublic | BindingFlags.Static);
-        var result = (string)method!.Invoke(null, [""])!;
+        var result = (string)CleanCategoryMethod.Invoke(null, [""])!;
 
         Assert.That(result, Is.EqualTo(""));
     }
@@ -137,8 +148,11 @@ public class CategoryAnalyzerTests
         var categoryFreq = GetPrivateField<Dictionary<string, int>>(analyzer, "CategoryFrequencies");
         var subsetFreq = GetPrivateField<Dictionary<HashSet<string>, int>>(analyzer, "SubsetFrequencies");
 
-        Assert.That(categoryFreq, Is.Empty);
-        Assert.That(subsetFreq, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(categoryFreq, Is.Empty);
+            Assert.That(subsetFreq, Is.Empty);
+        });
     }
 
     [Test]
@@ -150,8 +164,11 @@ public class CategoryAnalyzerTests
 
         var categoryFreq = GetPrivateField<Dictionary<string, int>>(analyzer, "CategoryFrequencies");
 
-        Assert.That(categoryFreq["Programming"], Is.EqualTo(1));
-        Assert.That(categoryFreq["CSharp"], Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(categoryFreq["Programming"], Is.EqualTo(1));
+            Assert.That(categoryFreq["CSharp"], Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -165,8 +182,11 @@ public class CategoryAnalyzerTests
 
         var categoryFreq = GetPrivateField<Dictionary<string, int>>(analyzer, "CategoryFrequencies");
 
-        Assert.That(categoryFreq["Programming"], Is.EqualTo(3));
-        Assert.That(categoryFreq["CSharp"], Is.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(categoryFreq["Programming"], Is.EqualTo(3));
+            Assert.That(categoryFreq["CSharp"], Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -198,8 +218,11 @@ public class CategoryAnalyzerTests
 
         var (deckName, tags) = analyzer.ResolveDeckName(null);
 
-        Assert.That(deckName, Is.EqualTo("Default"));
-        Assert.That(tags, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(deckName, Is.EqualTo("Default"));
+            Assert.That(tags, Is.Empty);
+        });
     }
 
     [Test]
@@ -210,8 +233,11 @@ public class CategoryAnalyzerTests
 
         var (deckName, tags) = analyzer.ResolveDeckName([]);
 
-        Assert.That(deckName, Is.EqualTo("Default"));
-        Assert.That(tags, Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(deckName, Is.EqualTo("Default"));
+            Assert.That(tags, Is.Empty);
+        });
     }
 
     [Test]
@@ -226,9 +252,12 @@ public class CategoryAnalyzerTests
 
         var (deckName, tags) = analyzer.ResolveDeckName(["Programming", "CSharp"]);
 
-        Assert.That(deckName, Is.EqualTo("Default"));
-        Assert.That(tags, Does.Contain("Programming"));
-        Assert.That(tags, Does.Contain("CSharp"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(deckName, Is.EqualTo("Default"));
+            Assert.That(tags, Does.Contain("Programming"));
+            Assert.That(tags, Does.Contain("CSharp"));
+        });
     }
 
     [Test]
@@ -317,9 +346,12 @@ public class CategoryAnalyzerTests
 
         var (deckName, tags) = analyzer.ResolveDeckName(["Programming", "ExtraTag"]);
 
-        Assert.That(deckName, Is.EqualTo("Programming"));
-        Assert.That(tags, Does.Not.Contain("Programming"));
-        Assert.That(tags, Does.Contain("Programming::ExtraTag"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(deckName, Is.EqualTo("Programming"));
+            Assert.That(tags, Does.Not.Contain("Programming"));
+            Assert.That(tags, Does.Contain("Programming::ExtraTag"));
+        });
     }
 
     [Test]

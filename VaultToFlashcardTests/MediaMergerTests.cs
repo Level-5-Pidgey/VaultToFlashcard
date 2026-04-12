@@ -1,4 +1,3 @@
-using NUnit.Framework;
 using VaultToFlashcard;
 
 namespace VaultToFlashcardTests;
@@ -177,8 +176,11 @@ public class MediaMergerTests
         var merger = new MediaMerger();
         merger.Merge(flashcards, mediaItems);
 
-        Assert.That(card.Media, Has.Count.EqualTo(2));
-        Assert.That(mediaItems[0].Fields, Is.EquivalentTo(new[] { "AUDIO" }));
-        Assert.That(mediaItems[1].Fields, Is.EquivalentTo(new[] { "IMAGE" }));
+        Assert.Multiple(() =>
+        {
+            Assert.That(card.Media, Has.Count.EqualTo(2));
+            Assert.That(mediaItems[0].Fields, Is.EquivalentTo(new[] { "AUDIO" }));
+            Assert.That(mediaItems[1].Fields, Is.EquivalentTo(new[] { "IMAGE" }));
+        });
     }
 }

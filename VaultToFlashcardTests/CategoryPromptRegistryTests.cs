@@ -1,7 +1,4 @@
-using System.Collections.Generic;
 using System.Text.Json;
-using Microsoft.Extensions.AI;
-using NUnit.Framework;
 using VaultToFlashcard;
 
 namespace VaultToFlashcardTests;
@@ -34,10 +31,13 @@ public class CategoryPromptRegistryTests
 
         var schema = CategoryPromptRegistry.BuildGroupedJsonSchema(cardTypes);
 
-        Assert.That(schema.ValueKind, Is.EqualTo(JsonValueKind.Object));
-        Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
-        Assert.That(props.TryGetProperty("Basic", out _), Is.True);
-        Assert.That(props.TryGetProperty("Cloze", out _), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema.ValueKind, Is.EqualTo(JsonValueKind.Object));
+            Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
+            Assert.That(props.TryGetProperty("Basic", out _), Is.True);
+            Assert.That(props.TryGetProperty("Cloze", out _), Is.True);
+        });
     }
 
     [Test]
@@ -58,10 +58,13 @@ public class CategoryPromptRegistryTests
 
         var schema = CategoryPromptRegistry.BuildGroupedJsonSchema(cardTypes);
 
-        Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
-        Assert.That(props.TryGetProperty("Basic", out var basicProp), Is.True);
-        Assert.That(basicProp.ValueKind, Is.EqualTo(JsonValueKind.Object));
-        Assert.That(props.TryGetProperty("Cloze", out _), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
+            Assert.That(props.TryGetProperty("Basic", out var basicProp), Is.True);
+            Assert.That(basicProp.ValueKind, Is.EqualTo(JsonValueKind.Object));
+            Assert.That(props.TryGetProperty("Cloze", out _), Is.False);
+        });
     }
 
     [Test]
@@ -75,9 +78,12 @@ public class CategoryPromptRegistryTests
 
         var desc = CategoryPromptRegistry.BuildGroupedSchemaDescription(cardTypes);
 
-        Assert.That(desc, Does.Contain("Basic"));
-        Assert.That(desc, Does.Contain("Cloze"));
-        Assert.That(desc, Does.Contain("array"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(desc, Does.Contain("Basic"));
+            Assert.That(desc, Does.Contain("Cloze"));
+            Assert.That(desc, Does.Contain("array"));
+        });
     }
 
     [Test]
@@ -128,10 +134,6 @@ public class CategoryPromptRegistryTests
     [Test]
     public void FindBestMatch_PriorityOrdering_ReturnsHighestPriority()
     {
-        // The implementation iterates noteCategories and takes the FIRST matching config per category,
-        // then returns the highest priority among those. Since "Test" config is added first,
-        // FindBestMatch(["Test", "Programming"]) returns the "Test" config (Priority=1).
-        // The implementation does NOT scan all configs for the highest priority overall.
         var configurations = new List<CategoryPromptConfiguration>
         {
             new()
@@ -158,9 +160,12 @@ public class CategoryPromptRegistryTests
         // When searching for ["Programming"], it should find the Programming config at Priority=10
         var result = registry.FindBestMatch(new[] { "Programming" });
 
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result!.Priority, Is.EqualTo(10));
-        Assert.That(result.CardTypes[0].ModelName, Is.EqualTo("HighPriority"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.Not.Null);
+            Assert.That(result!.Priority, Is.EqualTo(10));
+            Assert.That(result.CardTypes[0].ModelName, Is.EqualTo("HighPriority"));
+        });
     }
 
     [Test]
@@ -198,17 +203,20 @@ public class CategoryPromptRegistryTests
 
         var schema = CategoryPromptRegistry.BuildJsonSchema(cardType);
 
-        Assert.That(schema.TryGetProperty("type", out var typeProp), Is.True);
-        Assert.That(typeProp.GetString(), Is.EqualTo("object"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema.TryGetProperty("type", out var typeProp), Is.True);
+            Assert.That(typeProp.GetString(), Is.EqualTo("object"));
 
-        Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
-        Assert.That(props.TryGetProperty("front", out var frontProp), Is.True);
-        Assert.That(frontProp.TryGetProperty("type", out var frontType), Is.True);
-        Assert.That(frontType.GetString(), Is.EqualTo("string"));
+            Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
+            Assert.That(props.TryGetProperty("front", out var frontProp), Is.True);
+            Assert.That(frontProp.TryGetProperty("type", out var frontType), Is.True);
+            Assert.That(frontType.GetString(), Is.EqualTo("string"));
 
-        Assert.That(schema.TryGetProperty("required", out var required), Is.True);
-        Assert.That(required.EnumerateArray().Select(e => e.GetString()).ToList(),
-            Is.EquivalentTo(new[] { "front", "back" }));
+            Assert.That(schema.TryGetProperty("required", out var required), Is.True);
+            Assert.That(required.EnumerateArray().Select(e => e.GetString()).ToList(),
+                Is.EquivalentTo(new[] { "front", "back" }));
+        });
     }
 
     [Test]

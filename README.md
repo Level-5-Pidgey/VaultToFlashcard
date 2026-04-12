@@ -27,15 +27,15 @@ vault-to-flashcard --vault "C:\Path\To\Vault"
 
 ### Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `-v\|--vault <PATH>` | Path to your Obsidian vault | Required |
-| `-m\|--model <MODEL>` | AI model to use | gemini-3-flash-preview |
-| `-p\|--provider <PROVIDER>` | AI provider (gemini, anthropic, minimax, ollama) | gemini |
-| `-c\|--config <PATH>` | Path to category prompt config JSON | - |
-| `--assets <PATH>` | Custom assets folder path | vault/assets/ |
-| `--skip-token <TOKEN>` | Token marking sections to exclude | SKIP_TOKEN |
-| `--read-only | Simulate without adding to Anki | false |
+| Option                      | Description                                      | Default                |
+|-----------------------------|--------------------------------------------------|------------------------|
+| `-v\|--vault <PATH>`        | Path to your Obsidian vault                      | Required               |
+| `-m\|--model <MODEL>`       | AI model to use                                  | gemini-3-flash-preview |
+| `-p\|--provider <PROVIDER>` | AI provider (gemini, anthropic, minimax, ollama) | gemini                 |
+| `-c\|--config <PATH>`       | Path to category prompt config JSON              | -                      |
+| `--assets <PATH>`           | Custom assets folder path                        | vault/assets/          |
+| `--skip-token <TOKEN>`      | Token marking sections to exclude                | SKIP_TOKEN             |
+| `--read-only                | Simulate without adding to Anki                  | false                  |
 
 ### Examples
 
@@ -72,16 +72,16 @@ The config file lets you define custom note/card types per category. Each catego
 ```json
 [
   {
-    "category": "programming",
+    "category": "programming patterns",
     "priority": 1,
-    "systemPromptAddendum": "Focus on code examples.",
-    "assistantPromptAddendum": "Make cards practical.",
+    "systemPromptAddendum": "Focus on design patterns, code maintainability, and clean architecture. Use pseudocode for structural examples.",
+    "assistantPromptAddendum": "Generate cards using the Pattern Implementation and Trade-off Matrix models. Focus on 'Before vs After' refactoring scenarios.",
     "cardTypes": [
       {
         "modelName": "Basic (Programming)",
         "jsonSchemaProperties": {
-          "Front": "string",
-          "Back": "string"
+          "Front": "What is the front of the card for",
+          "Back": "A function that captures its lexical environment"
         },
         "exampleOutput": "{\"Front\": \"What is a closure?\", \"Back\": \"A function that captures its lexical environment.\"}"
       }
@@ -92,15 +92,15 @@ The config file lets you define custom note/card types per category. Each catego
 
 ### Fields
 
-| Field | Description |
-|---|---|
-| `category` | Value from the note's `categories` frontmatter |
-| `priority` | Higher priority categories are matched first |
-| `systemPromptAddendum` | Extra instructions for the AI system prompt |
-| `assistantPromptAddendum` | Extra instructions appended to the user prompt |
-| `cardTypes[].modelName` | Name of your Anki note model |
-| `cardTypes[].jsonSchemaProperties` | Fields your note model requires (name → type) |
-| `cardTypes[].exampleOutput` | JSON example of valid card output |
+| Field                              | Description                                      |
+|------------------------------------|--------------------------------------------------|
+| `category`                         | Value from the note's `categories` frontmatter   |
+| `priority`                         | Higher priority categories are matched first     |
+| `systemPromptAddendum`             | Extra instructions for the AI system prompt      |
+| `assistantPromptAddendum`          | Extra instructions appended to the user prompt   |
+| `cardTypes[].modelName`            | Name of your Anki note model                     |
+| `cardTypes[].jsonSchemaProperties` | Fields your note model requires (name → example) |
+| `cardTypes[].exampleOutput`        | JSON example of valid card output                |
 
 Without a config, the tool defaults to simple `Basic` and `Cloze` note types.
 

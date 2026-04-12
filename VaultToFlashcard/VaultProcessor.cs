@@ -624,7 +624,7 @@ public class VaultProcessor(
 				if (!readOnly) await ankiClient.DeleteNotesAsync(cachedEntry.NoteIds);
 
 				var flashcards = readOnly
-					? (IReadOnlyCollection<DynamicFlashcard>)new List<DynamicFlashcard>
+					? new List<DynamicFlashcard>
 						{ new("Basic", new Dictionary<string, string>()) }
 					: await GenerateFlashcardsAsync(chunkContext, fileContext);
 
@@ -708,20 +708,25 @@ public class VaultProcessor(
 		}
 
 		// Build examples from configured card types
-		foreach (var cardType in cardTypes)
-			if (!string.IsNullOrEmpty(cardType.ExampleOutput))
-				assistantPrompt.AppendLine($"- {cardType.ModelName}: [{cardType.ExampleOutput}]");
+		var configuredCardTypeDefs = cardTypes.Where(cardType => !string.IsNullOrEmpty(cardType.ExampleOutput));
+		foreach (var cardType in configuredCardTypeDefs)
+		{
+			assistantPrompt.AppendLine($"- {cardType.ModelName}: [{cardType.ExampleOutput}]");
+		}
 
 		// Add category-specific addendums
 		if (config != null && !string.IsNullOrEmpty(config.AssistantPromptAddendum))
 		{
-			assistantPrompt.AppendLine();
+			if (assistantPrompt.Length > 0)
+			{
+				assistantPrompt.AppendLine();
+			}
+
 			assistantPrompt.AppendLine(config.AssistantPromptAddendum);
 		}
 
 		if (containsList)
 		{
-			systemPromptTenantNumber++;
 			systemPrompt.AppendLine(
 				$"{systemPromptTenantNumber}. LIST HOOKS: If converting a list, the text outside the cloze MUST contain a unique characteristic (function/keyword) to make the card uniquely guessable.");
 			assistantPrompt.AppendLine(
@@ -729,14 +734,18 @@ public class VaultProcessor(
 		}
 
 		// Add CARD TYPE SELECTION rule
-		systemPrompt.AppendLine();
+		systemPromptTenantNumber++;
 		systemPrompt.AppendLine(
-			$"{systemPromptTenantNumber + 1}. CARD TYPE SELECTION: Use whichever card type(s) best serve the content. You may create cards from only one type, multiple types, or none if the content doesn't warrant it.");
+			$"{systemPromptTenantNumber}. CARD TYPE SELECTION: Use whichever card type(s) best serve the content. You may create cards from only one type, multiple types, or none if the content doesn't warrant it.");
 
 		// Add system prompt addendum from config
 		if (config != null && !string.IsNullOrEmpty(config.SystemPromptAddendum))
 		{
-			systemPrompt.AppendLine();
+			if (systemPrompt.Length > 0)
+			{
+				systemPrompt.AppendLine();
+			}
+
 			systemPrompt.AppendLine(config.SystemPromptAddendum);
 		}
 
@@ -746,15 +755,22 @@ public class VaultProcessor(
 		};
 
 		if (config != null)
+		{
 			messages.Add(new ChatMessage(ChatRole.User,
 				$"Context: This note has the following categories: '{config.Category}'."));
+		}
 
 		if (!string.Equals(Path.GetFileNameWithoutExtension(relativePath), header, StringComparison.OrdinalIgnoreCase))
+		{
 			messages.Add(new ChatMessage(ChatRole.User, $"Section Name: {header}"));
+		}
 
 		messages.Add(new ChatMessage(ChatRole.Assistant, assistantPrompt.ToString()));
 		messages.Add(new ChatMessage(ChatRole.User,
-			$@"Content to convert:\n{content}\n\nTask: Create atomic Anki flashcards from this content."));
+			$"Content to convert:{Environment.NewLine}" +
+			$"{content}{Environment.NewLine}{Environment.NewLine}" +
+			$"Task: Create atomic Anki flashcards from this content.")
+		);
 
 		return messages;
 	}

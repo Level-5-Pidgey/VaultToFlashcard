@@ -10,7 +10,7 @@ public class MediaMerger
 
     public void Merge(IReadOnlyCollection<DynamicFlashcard> flashcards, IReadOnlyCollection<MediaItem> mediaItems)
     {
-        if (!mediaItems.Any()) return;
+        if (!flashcards.Any() || !mediaItems.Any()) return;
 
         foreach (var media in mediaItems)
         {
@@ -29,7 +29,7 @@ public class MediaMerger
         }
     }
 
-    private static DynamicFlashcard? FindTargetCard(IReadOnlyCollection<DynamicFlashcard> flashcards, MediaItem media)
+    public static DynamicFlashcard? FindTargetCard(IReadOnlyCollection<DynamicFlashcard> flashcards, MediaItem media)
     {
         var fieldNames = GetFieldNamesForType(media.Type);
 
@@ -37,13 +37,13 @@ public class MediaMerger
             card.Fields.Keys.Any(k => fieldNames.Contains(k, StringComparer.OrdinalIgnoreCase)));
     }
 
-    private static string DetermineFieldName(MediaType type, DynamicFlashcard card)
+    public static string DetermineFieldName(MediaType type, DynamicFlashcard card)
     {
         var fieldNames = GetFieldNamesForType(type);
         return card.Fields.Keys.First(k => fieldNames.Contains(k, StringComparer.OrdinalIgnoreCase));
     }
 
-    private static HashSet<string> GetFieldNamesForType(MediaType type) =>
+    public static HashSet<string> GetFieldNamesForType(MediaType type) =>
         type switch
         {
             MediaType.Audio => AudioFieldNames,

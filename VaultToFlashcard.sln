@@ -1,8 +1,8 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VaultToFlashcard", "VaultToFlashcard.csproj", "{A5C82E79-29C2-4D81-A8B7-F8769B5924AE}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VaultToFlashcardTests", "VaultToFlashcardTests\VaultToFlashcardTests.csproj", "{1D813433-2857-4718-AA3D-FDD507E7F689}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VaultToFlashcard", "VaultToFlashcard\VaultToFlashcard.csproj", "{A41DE1C3-DE76-4AB9-95C9-E982F145BAEB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -10,13 +10,13 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{A5C82E79-29C2-4D81-A8B7-F8769B5924AE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{A5C82E79-29C2-4D81-A8B7-F8769B5924AE}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{A5C82E79-29C2-4D81-A8B7-F8769B5924AE}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{A5C82E79-29C2-4D81-A8B7-F8769B5924AE}.Release|Any CPU.Build.0 = Release|Any CPU
 		{1D813433-2857-4718-AA3D-FDD507E7F689}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{1D813433-2857-4718-AA3D-FDD507E7F689}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1D813433-2857-4718-AA3D-FDD507E7F689}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1D813433-2857-4718-AA3D-FDD507E7F689}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A41DE1C3-DE76-4AB9-95C9-E982F145BAEB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A41DE1C3-DE76-4AB9-95C9-E982F145BAEB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A41DE1C3-DE76-4AB9-95C9-E982F145BAEB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A41DE1C3-DE76-4AB9-95C9-E982F145BAEB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

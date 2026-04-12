@@ -1,7 +1,17 @@
+
+# C# build artefacts
 bin/
 obj/
+
+# IDE files/folders
 .idea/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+
+# Agentic Development
+docs/
+.claude/
+
+# Git
 /.worktrees/

@@ -23,9 +23,5 @@
         <PackageReference Include="YamlDotNet" Version="15.1.2"/>
     </ItemGroup>
 
-    <ItemGroup>
-        <PackageReference Include="xunit" Version="2.9.2" />
-        <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-    </ItemGroup>
 
 </Project>

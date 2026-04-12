@@ -15,13 +15,13 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 			.AddUserSecrets<Program>()
 			.Build();
 
-		var apiKey = configuration["GeminiApiKey"];
+		var apiKey = configuration["ApiKey"];
 
 		if (string.IsNullOrEmpty(apiKey))
 		{
 			AnsiConsole.MarkupLine("[red]Error: API key is not configured.[/]");
-			AnsiConsole.MarkupLine("Please set the 'GeminiApiKey' in user secrets, for example:");
-			AnsiConsole.MarkupLine("[yellow]dotnet user-secrets set \"GeminiApiKey\" \"<YOUR_API_KEY>\"[/]");
+			AnsiConsole.MarkupLine("Please set the 'ApiKey' in user secrets, for example:");
+			AnsiConsole.MarkupLine("[yellow]dotnet user-secrets set \"ApiKey\" \"<YOUR_API_KEY>\"[/]");
 			return -1;
 		}
 
@@ -64,8 +64,14 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 			return -1;
 		}
 
-		var processor = new VaultProcessor(ankiClient, settings.ReadOnly, settings.SkipToken, promptRegistry);
-		await processor.ProcessVault(settings.VaultPath, apiKey ?? string.Empty, settings.Model, settings.AssetsPath);
+		// Create the AI client based on provider
+		var aiClient = AiChatProviderFactory.CreateChatClient(
+			settings.Provider,
+			apiKey ?? string.Empty,
+			settings.Model);
+
+		var processor = new VaultProcessor(ankiClient, aiClient, settings.ReadOnly, settings.SkipToken, promptRegistry);
+		await processor.ProcessVault(settings.VaultPath, settings.AssetsPath);
 
 		return 0;
 	}

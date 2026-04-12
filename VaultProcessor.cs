@@ -18,14 +18,18 @@ using YamlDotNet.Serialization;
 
 namespace VaultToFlashcard;
 
-public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly, string skipToken = "SKIP_TOKEN", CategoryPromptRegistry? promptRegistry = null, ILogger? logger = null)
+public class VaultProcessor(
+	AnkiConnectClient ankiClient,
+	IChatClient chatClient,
+	bool readOnly,
+	string skipToken = "SKIP_TOKEN",
+	CategoryPromptRegistry? promptRegistry = null,
+	ILogger? logger = null)
 {
-	private readonly ILogger? _logger = logger;
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
 	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
 	private readonly MediaExtractor MediaExtractor = new();
 	private readonly MediaMerger MediaMerger = new();
-	private readonly string _skipToken = skipToken;
 	private ConcurrentDictionary<string, CacheEntry> Cache = new();
 
 	private const string CacheFileName = ".obsidian-anki-cache.json";
@@ -120,7 +124,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		task.StopTask();
 	}
 
-	public async Task ProcessVault(string vaultPath, string apiKey, string model, string? assetsPath)
+	public async Task ProcessVault(string vaultPath, string? assetsPath)
 	{
 		AnsiConsole.MarkupLine($"Starting vault processing at: [blue]{vaultPath}[/]");
 		var cachePath = Path.Combine(vaultPath, CacheFileName);
@@ -174,7 +178,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 					{
 						try
 						{
-							var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath, apiKey, model,
+							var (fileSummary, tree, relativePath) = await ProcessFileAsync(filePath,
 								vaultPath, assetsPath, allValidNoteIds, summary);
 							summary.Aggregate(fileSummary);
 							if (tree != null && relativePath != null) allResults.Add((relativePath, tree));
@@ -379,8 +383,6 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		string RelativePath,
 		string DeckName,
 		IReadOnlyCollection<string> DeckTags,
-		string Model,
-		string ApiKey,
 		CategoryPromptConfiguration PromptConfig
 	);
 
@@ -395,7 +397,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 	);
 
 	private async Task<(ProcessingSummary? summary, Tree? tree, string? relativePath)> ProcessFileAsync(string filePath,
-		string apiKey, string model, string vaultPath, string? assetsPath, ConcurrentBag<long> allValidNoteIds, ProcessingSummary summary)
+		string vaultPath, string? assetsPath, ConcurrentBag<long> allValidNoteIds, ProcessingSummary summary)
 	{
 		var relativePath = Path.GetRelativePath(vaultPath, filePath);
 
@@ -429,7 +431,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 				if (string.IsNullOrWhiteSpace(content)) continue;
 
 				// Check if section contains skip token
-				if (_skipToken != null && content.Contains(_skipToken))
+				if (skipToken != null && content.Contains(skipToken))
 				{
 					tree.AddNode(GetFileUpdateResultString(header, FileUpdateType.Unchanged, "skipped (skip token)"));
 					continue;
@@ -445,7 +447,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 
 				// Create contexts for suspend/unsuspend operations
 				var fileContext = new FileProcessingContext(
-					vaultName, vaultPath, assetsPath ?? string.Empty, relativePath, deckName, deckTags, model, apiKey, promptConfig);
+					vaultName, vaultPath, assetsPath ?? string.Empty, relativePath, deckName, deckTags, promptConfig);
 				var chunkContext = new ChunkProcessingContext(header, content, cacheKey, contentHash);
 
 				// File was in Anki (cached) and now study=false -> suspend
@@ -762,8 +764,6 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		var header = chunkContext.Header;
 		var promptConfig = fileContext.PromptConfig;
 		var relativePath = fileContext.RelativePath;
-		var apiKey = fileContext.ApiKey;
-		var model = fileContext.Model;
 		var vaultName = fileContext.VaultName;
 
 		// Use first card type from config (could be extended to pick based on content)
@@ -776,21 +776,6 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		var mediaItems = extracted.Media;
 
 		var promptMessages = GetPromptMessages(cleanedContent, promptConfig, relativePath, header);
-		var gemini = new GeminiChatClient(new GeminiClientOptions
-		{
-			ApiKey = apiKey,
-			ModelId = model
-		});
-
-		using var loggerFactory = LoggerFactory.Create(builder =>
-		{
-			builder.AddConsole();
-			builder.SetMinimumLevel(LogLevel.Warning);
-		});
-
-		var client = new ChatClientBuilder(gemini)
-			.UseLogging(loggerFactory)
-			.Build();
 
 		// Build JSON schema for the selected card type
 		var schema = CategoryPromptRegistry.BuildJsonSchema(selectedCardType);
@@ -802,7 +787,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 			Temperature = 0.15f
 		};
 
-		var response = await client.GetResponseAsync(promptMessages, options);
+		var response = await chatClient.GetResponseAsync(promptMessages, options);
 
 		if (response.FinishReason != ChatFinishReason.Stop)
 		{
@@ -925,7 +910,7 @@ public partial class VaultProcessor(AnkiConnectClient ankiClient, bool readOnly,
 		}
 		catch (Exception ex)
 		{
-			_logger?.LogWarning(ex, "Markdig HTML conversion failed, falling back to plain text");
+			logger?.LogWarning(ex, "Markdig HTML conversion failed, falling back to plain text");
 			return ExtractText(obj); // Don't apply regex here - ParseAndSanitize will do it
 		}
 	}

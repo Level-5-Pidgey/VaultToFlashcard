@@ -339,7 +339,7 @@ public class AnkiConnectClient
 
 public record AnkiAction(
 	[property: JsonPropertyName("action")] string Action,
-	[property: JsonPropertyName("params")] object Params,
+	[property: JsonPropertyName("params")] object? Params,
 	[property: JsonPropertyName("version")]
 	int? Version = 6
 );

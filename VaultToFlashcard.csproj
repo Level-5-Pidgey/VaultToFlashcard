@@ -13,6 +13,7 @@
         <PackageReference Include="Google.GenAI" Version="0.11.0"/>
         <PackageReference Include="Markdig" Version="0.37.0"/>
         <PackageReference Include="Microsoft.Extensions.AI" Version="10.4.1"/>
+        <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.4.1"/>
         <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="8.0.0"/>
         <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="11.0.0-preview.2.26159.112"/>
         <PackageReference Include="Spectre.Console" Version="0.54.0"/>

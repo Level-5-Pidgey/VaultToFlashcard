@@ -31,4 +31,14 @@ public class CommandSettings : Spectre.Console.Cli.CommandSettings
 	[Description("Token within %% comment blocks that marks a section to exclude from flashcard generation.")]
 	[DefaultValue("SKIP_TOKEN")]
 	public string SkipToken { get; set; } = "SKIP_TOKEN";
+
+	[CommandOption("-p|--provider <PROVIDER>")]
+	[Description("The AI provider to use (gemini, anthropic, minimax, ollama).")]
+	[DefaultValue("gemini")]
+	public string Provider { get; set; } = "gemini";
+
+	[CommandOption("-r|--rate-limit <SECONDS>")]
+	[Description("Rate limit window in seconds (requests per window).")]
+	[DefaultValue(15)]
+	public int RateLimit { get; set; } = 15;
 }

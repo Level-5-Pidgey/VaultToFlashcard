@@ -214,4 +214,62 @@ public class VaultProcessorTests
 	}
 
 	#endregion
+
+	#region IsAllMediaCardType Tests
+
+	[Test]
+	public void IsAllMediaCardType_AllMediaFields_ReturnsTrue()
+	{
+		var cardType = new CardTypeDefinition
+		{
+			ModelName = "MediaOnly",
+			JsonSchemaProperties = new Dictionary<string, string>
+			{
+				["audio"] = "Audio file",
+				["picture"] = "Image"
+			}
+		};
+
+		var result = MediaMerger.IsAllMediaCardType(cardType);
+
+		Assert.That(result, Is.True);
+	}
+
+	[Test]
+	public void IsAllMediaCardType_MixedFields_ReturnsFalse()
+	{
+		var cardType = new CardTypeDefinition
+		{
+			ModelName = "Mixed",
+			JsonSchemaProperties = new Dictionary<string, string>
+			{
+				["front"] = "Question",
+				["audio"] = "Audio file"
+			}
+		};
+
+		var result = MediaMerger.IsAllMediaCardType(cardType);
+
+		Assert.That(result, Is.False);
+	}
+
+	[Test]
+	public void IsAllMediaCardType_NoMediaFields_ReturnsFalse()
+	{
+		var cardType = new CardTypeDefinition
+		{
+			ModelName = "TextOnly",
+			JsonSchemaProperties = new Dictionary<string, string>
+			{
+				["front"] = "Question",
+				["back"] = "Answer"
+			}
+		};
+
+		var result = MediaMerger.IsAllMediaCardType(cardType);
+
+		Assert.That(result, Is.False);
+	}
+
+	#endregion
 }

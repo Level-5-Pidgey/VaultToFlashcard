@@ -417,7 +417,7 @@ public class VaultProcessor(
 			var shouldStudy = EvaluateShouldStudy(studyValue);
 			var noteCategories = ExtractCategories(frontMatter);
 
-			var promptConfig = PromptRegistry.FindBestMatch(noteCategories) ?? PromptRegistry.GetDefaultConfiguration();
+			var promptConfig = PromptRegistry.GetEffectiveConfiguration(noteCategories);
 			var cardTypes = promptConfig.CardTypes.Select(x => x.ModelName);
 			var tree = new Tree(
 				$"[blue]{Markup.Escape(relativePath)}[/] [Grey70]({Markup.Escape(string.Join(", ", cardTypes))})[/]");
@@ -792,16 +792,68 @@ public class VaultProcessor(
 		var cleanedContent = extracted.CleanedContent;
 		var mediaItems = extracted.Media;
 
-		List<ChatMessage> promptMessages = GetPromptMessages(cleanedContent, promptConfig, relativePath, header).ToList();
+		// Identify all-media card types (these skip AI inference)
+		var allCardTypes = promptConfig.CardTypes;
+		var allMediaCardTypes = allCardTypes
+			.Where(MediaMerger.IsAllMediaCardType)
+			.ToList();
+
+		var mixedCardTypes = allCardTypes
+			.Where(ct => !MediaMerger.IsAllMediaCardType(ct))
+			.ToList();
+
+		// Handle all-media card types: create cards directly from media items
+		var mediaOnlyCards = new List<DynamicFlashcard>();
+		foreach (var mediaCardType in allMediaCardTypes)
+		{
+			var matchingMedia = mediaItems
+				.Where(m => MediaMerger.GetFieldNamesForType(m.Type)
+					.Any(f => mediaCardType.JsonSchemaProperties.ContainsKey(f)))
+				.ToList();
+
+			if (matchingMedia.Count == 0) continue; // Skip if no matching media
+
+			var fields = new Dictionary<string, string>();
+			foreach (var key in mediaCardType.JsonSchemaProperties.Keys)
+				fields[key] = "";
+
+			var card = new DynamicFlashcard(mediaCardType.ModelName, fields,
+				CreateObsidianDeeplink(vaultName, relativePath, header));
+
+			foreach (var media in matchingMedia)
+			{
+				media.Fields = new[] { MediaMerger.DetermineFieldName(media.Type, card) };
+				card.Media.Add(media);
+			}
+
+			mediaOnlyCards.Add(card);
+		}
+
+		// If all card types are all-media and we have cards, return them directly
+		if (mixedCardTypes.Count == 0 && mediaOnlyCards.Count > 0)
+		{
+			return mediaOnlyCards;
+		}
+
+		// Create filtered config with only mixed card types for prompt generation
+		var mixedConfig = new CategoryPromptConfiguration
+		{
+			Category = promptConfig.Category,
+			Priority = promptConfig.Priority,
+			SystemPromptAddendum = promptConfig.SystemPromptAddendum,
+			AssistantPromptAddendum = promptConfig.AssistantPromptAddendum,
+			SkipBasicTypes = promptConfig.SkipBasicTypes,
+			CardTypes = mixedCardTypes
+		};
+		List<ChatMessage> promptMessages = GetPromptMessages(cleanedContent, mixedConfig, relativePath, header).ToList();
 
 		// Build grouped JSON schema from all configured card types
-		var allCardTypes = promptConfig.CardTypes;
-		var groupedSchema = CategoryPromptRegistry.BuildGroupedJsonSchema(allCardTypes);
-		var schemaDescription = CategoryPromptRegistry.BuildGroupedSchemaDescription(allCardTypes);
+		var groupedSchema = CategoryPromptRegistry.BuildGroupedJsonSchema(mixedCardTypes);
+		var schemaDescription = CategoryPromptRegistry.BuildGroupedSchemaDescription(mixedCardTypes);
 
 		var options = new ChatOptions
 		{
-			ResponseFormat = ChatResponseFormat.ForJsonSchema(groupedSchema, allCardTypes.First().ModelName, schemaDescription),
+			ResponseFormat = ChatResponseFormat.ForJsonSchema(groupedSchema, mixedCardTypes.First().ModelName, schemaDescription),
 			Temperature = 0.15f
 		};
 
@@ -835,7 +887,7 @@ public class VaultProcessor(
 				var allCards = new List<DynamicFlashcard>();
 				var totalInvalid = 0;
 
-				foreach (var cardType in allCardTypes)
+				foreach (var cardType in mixedCardTypes)
 				{
 					var typeName = cardType.ModelName;
 					if (!root.TryGetProperty(typeName, out var cardArray) || cardArray.ValueKind != JsonValueKind.Array)
@@ -891,6 +943,8 @@ public class VaultProcessor(
 				{
 					MediaMerger.Merge(allCards, mediaItems);
 				}
+
+				allCards.AddRange(mediaOnlyCards);
 
 				return allCards;
 			}

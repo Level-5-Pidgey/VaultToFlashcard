@@ -189,33 +189,87 @@ public class CategoryPromptRegistryTests
     }
 
     [Test]
-    public void BuildJsonSchema_CorrectStructure_ReturnsObjectType()
+    public void GetEffectiveConfiguration_NoMatch_ReturnsDefaultConfiguration()
     {
-        var cardType = new CardTypeDefinition
+        var configurations = new List<CategoryPromptConfiguration>
         {
-            ModelName = "Basic",
-            JsonSchemaProperties = new Dictionary<string, string>
+            new()
             {
-                ["front"] = "question",
-                ["back"] = "answer"
+                Category = "Programming",
+                Priority = 1,
+                CardTypes = new List<CardTypeDefinition>
+                {
+                    new() { ModelName = "Code", JsonSchemaProperties = new() { ["snippet"] = "code snippet" } }
+                }
             }
         };
+        var registry = new CategoryPromptRegistry(configurations);
 
-        var schema = CategoryPromptRegistry.BuildJsonSchema(cardType);
+        var result = registry.GetEffectiveConfiguration(new[] { "NonExistent" });
 
         Assert.Multiple(() =>
         {
-            Assert.That(schema.TryGetProperty("type", out var typeProp), Is.True);
-            Assert.That(typeProp.GetString(), Is.EqualTo("object"));
+            Assert.That(result.Category, Is.EqualTo("Default"));
+            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze" }));
+        });
+    }
 
-            Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
-            Assert.That(props.TryGetProperty("front", out var frontProp), Is.True);
-            Assert.That(frontProp.TryGetProperty("type", out var frontType), Is.True);
-            Assert.That(frontType.GetString(), Is.EqualTo("string"));
+    [Test]
+    public void GetEffectiveConfiguration_Match_AddsNewCardTypes()
+    {
+        var configurations = new List<CategoryPromptConfiguration>
+        {
+            new()
+            {
+                Category = "Programming",
+                Priority = 1,
+                CardTypes = new List<CardTypeDefinition>
+                {
+                    new() { ModelName = "Code", JsonSchemaProperties = new() { ["snippet"] = "code snippet" }, ExampleOutput = "{\"snippet\":\"...\"}" }
+                }
+            }
+        };
+        var registry = new CategoryPromptRegistry(configurations);
 
-            Assert.That(schema.TryGetProperty("required", out var required), Is.True);
-            Assert.That(required.EnumerateArray().Select(e => e.GetString()).ToList(),
-                Is.EquivalentTo(new[] { "front", "back" }));
+        var result = registry.GetEffectiveConfiguration(new[] { "Programming" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Category, Is.EqualTo("Programming"));
+            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze", "Code" }));
+        });
+    }
+
+    [Test]
+    public void GetEffectiveConfiguration_MatchWithSameName_OverwritesDefault()
+    {
+        var configurations = new List<CategoryPromptConfiguration>
+        {
+            new()
+            {
+                Category = "Programming",
+                Priority = 1,
+                CardTypes = new List<CardTypeDefinition>
+                {
+                    new()
+                    {
+                        ModelName = "Cloze",
+                        JsonSchemaProperties = new() { ["text"] = "custom cloze description" },
+                        ExampleOutput = "{\"text\":\"custom\"}"
+                    }
+                }
+            }
+        };
+        var registry = new CategoryPromptRegistry(configurations);
+
+        var result = registry.GetEffectiveConfiguration(new[] { "Programming" });
+
+        var clozeCard = result.CardTypes.First(ct => ct.ModelName == "Cloze");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.CardTypes.Count, Is.EqualTo(2)); // Basic + modified Cloze
+            Assert.That(clozeCard.JsonSchemaProperties["text"], Is.EqualTo("custom cloze description"));
+            Assert.That(clozeCard.ExampleOutput, Is.EqualTo("{\"text\":\"custom\"}"));
         });
     }
 
@@ -253,5 +307,96 @@ public class CategoryPromptRegistryTests
         {
             "CustomType1", "SharedType", "CustomType2", "Basic", "Cloze"
         }));
+    }
+
+    [Test]
+    public void GetEffectiveConfiguration_SkipBasicTypesWithCustomTypes_OnlyCustomTypes()
+    {
+        var configurations = new List<CategoryPromptConfiguration>
+        {
+            new()
+            {
+                Category = "Custom",
+                Priority = 1,
+                SkipBasicTypes = true,
+                CardTypes = new List<CardTypeDefinition>
+                {
+                    new() { ModelName = "CustomCard", JsonSchemaProperties = new() { ["field"] = "custom field" } }
+                }
+            }
+        };
+        var registry = new CategoryPromptRegistry(configurations);
+
+        var result = registry.GetEffectiveConfiguration(new[] { "Custom" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "CustomCard" }));
+            Assert.That(result.CardTypes.Any(ct => ct.ModelName == "Basic"), Is.False);
+            Assert.That(result.CardTypes.Any(ct => ct.ModelName == "Cloze"), Is.False);
+        });
+    }
+
+    [Test]
+    public void BuildGroupedJsonSchema_FiltersMediaFields_ReturnsSchemaWithoutMediaFields()
+    {
+        var cardTypes = new List<CardTypeDefinition>
+        {
+            new()
+            {
+                ModelName = "Sentences",
+                JsonSchemaProperties = new Dictionary<string, string>
+                {
+                    ["front"] = "Japanese sentence",
+                    ["back"] = "English translation",
+                    ["audio"] = "Audio file for pronunciation",
+                    ["picture"] = "Image of concept"
+                }
+            }
+        };
+
+        var schema = CategoryPromptRegistry.BuildGroupedJsonSchema(cardTypes);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema.TryGetProperty("properties", out var props), Is.True);
+            Assert.That(props.TryGetProperty("Sentences", out var sentenceProp), Is.True);
+            Assert.That(sentenceProp.TryGetProperty("items", out var items), Is.True);
+            Assert.That(items.TryGetProperty("properties", out var sentProps), Is.True);
+
+            // Verify media fields are filtered
+            Assert.That(sentProps.TryGetProperty("front", out _), Is.True);
+            Assert.That(sentProps.TryGetProperty("back", out _), Is.True);
+            Assert.That(sentProps.TryGetProperty("audio", out _), Is.False);
+            Assert.That(sentProps.TryGetProperty("picture", out _), Is.False);
+
+            // Verify media fields are not in required array
+            Assert.That(items.TryGetProperty("required", out var required), Is.True);
+            Assert.That(required.EnumerateArray().Select(e => e.GetString()).ToList(), Does.Not.Contains("audio"));
+            Assert.That(required.EnumerateArray().Select(e => e.GetString()).ToList(), Does.Not.Contains("picture"));
+        });
+    }
+
+    [Test]
+    public void GetEffectiveConfiguration_SkipBasicTypesWithoutCustomTypes_FallsBackToDefaults()
+    {
+        var configurations = new List<CategoryPromptConfiguration>
+        {
+            new()
+            {
+                Category = "Custom",
+                Priority = 1,
+                SkipBasicTypes = true
+                // No CardTypes defined
+            }
+        };
+        var registry = new CategoryPromptRegistry(configurations);
+
+        var result = registry.GetEffectiveConfiguration(new[] { "Custom" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze" }));
+        });
     }
 }

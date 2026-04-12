@@ -25,5 +25,8 @@ public class CategoryPromptConfiguration
 	[JsonPropertyName("assistantPromptAddendum")]
 	public string AssistantPromptAddendum { get; set; } = "";
 
+		[JsonPropertyName("skipBasicTypes")]
+	public bool SkipBasicTypes { get; set; } = false;
+
 	[JsonPropertyName("cardTypes")] public List<CardTypeDefinition> CardTypes { get; set; } = new();
 }

@@ -50,6 +50,63 @@ public class CategoryPromptRegistry
 		return DefaultConfiguration;
 	}
 
+	public CategoryPromptConfiguration GetEffectiveConfiguration(IReadOnlyCollection<string>? noteCategories)
+	{
+		var matched = FindBestMatch(noteCategories);
+		if (matched == null) return DefaultConfiguration;
+
+		// Start with a copy of defaults only if not skipping
+		var effective = new CategoryPromptConfiguration
+		{
+			Category = matched.Category,
+			Priority = matched.Priority,
+			SystemPromptAddendum = matched.SystemPromptAddendum,
+			AssistantPromptAddendum = matched.AssistantPromptAddendum,
+			CardTypes = matched.SkipBasicTypes
+				? new List<CardTypeDefinition>()
+				: DefaultConfiguration.CardTypes.Select(ct => new CardTypeDefinition
+				  {
+					  ModelName = ct.ModelName,
+					  JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
+					  ExampleOutput = ct.ExampleOutput
+				  }).ToList()
+		};
+
+		// Overlay or add category card types
+		foreach (var categoryCardType in matched.CardTypes)
+		{
+			var existing = effective.CardTypes.FirstOrDefault(ct =>
+				ct.ModelName.Equals(categoryCardType.ModelName, StringComparison.OrdinalIgnoreCase));
+			if (existing != null)
+			{
+				existing.JsonSchemaProperties = new Dictionary<string, string>(categoryCardType.JsonSchemaProperties);
+				existing.ExampleOutput = categoryCardType.ExampleOutput;
+			}
+			else
+			{
+				effective.CardTypes.Add(new CardTypeDefinition
+				{
+					ModelName = categoryCardType.ModelName,
+					JsonSchemaProperties = new Dictionary<string, string>(categoryCardType.JsonSchemaProperties),
+					ExampleOutput = categoryCardType.ExampleOutput
+				});
+			}
+		}
+
+		// If skipBasicTypes but no custom types added, revert to defaults
+		if (matched.SkipBasicTypes && effective.CardTypes.Count == 0)
+		{
+			effective.CardTypes = DefaultConfiguration.CardTypes.Select(ct => new CardTypeDefinition
+			{
+				ModelName = ct.ModelName,
+				JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
+				ExampleOutput = ct.ExampleOutput
+			}).ToList();
+		}
+
+		return effective;
+	}
+
 	public CategoryPromptConfiguration? FindBestMatch(IReadOnlyCollection<string>? noteCategories)
 	{
 		if (noteCategories == null || !noteCategories.Any()) return null;
@@ -90,29 +147,19 @@ public class CategoryPromptRegistry
 		return models;
 	}
 
-	public static JsonElement BuildJsonSchema(CardTypeDefinition cardType)
-	{
-		var schemaObj = new Dictionary<string, object>
-		{
-			["type"] = "object",
-			["properties"] = BuildProperties(cardType.JsonSchemaProperties),
-			["required"] = cardType.JsonSchemaProperties.Keys.ToList()
-		};
-
-		var json = JsonSerializer.Serialize(schemaObj);
-		using var doc = JsonDocument.Parse(json);
-		return doc.RootElement.Clone();
-	}
-
-	private static JsonElement BuildProperties(Dictionary<string, string> properties)
+	private static JsonElement BuildProperties(Dictionary<string, string> properties, HashSet<string>? excludeFields = null)
 	{
 		var propsObj = new Dictionary<string, object>();
 		foreach (var (key, description) in properties)
+		{
+			if (excludeFields != null && excludeFields.Contains(key, StringComparer.OrdinalIgnoreCase))
+				continue;
 			propsObj[key] = new Dictionary<string, string>
 			{
 				["type"] = "string",
 				["description"] = description
 			};
+		}
 
 		var json = JsonSerializer.Serialize(propsObj);
 		using var doc = JsonDocument.Parse(json);
@@ -135,8 +182,10 @@ public class CategoryPromptRegistry
 			{
 				["type"] = "object",
 				["additionalProperties"] = false,
-				["properties"] = BuildProperties(cardType.JsonSchemaProperties),
-				["required"] = cardType.JsonSchemaProperties.Keys.ToList()
+				["properties"] = BuildProperties(cardType.JsonSchemaProperties, MediaMerger.MediaFieldNames),
+				["required"] = cardType.JsonSchemaProperties.Keys
+					.Where(k => !MediaMerger.MediaFieldNames.Contains(k, StringComparer.OrdinalIgnoreCase))
+					.ToList()
 			};
 
 			properties[cardType.ModelName] = new Dictionary<string, object>

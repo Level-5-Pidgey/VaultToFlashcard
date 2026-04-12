@@ -2,6 +2,13 @@ namespace VaultToFlashcard;
 
 public class MediaMerger
 {
+    public static readonly HashSet<string> MediaFieldNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "audio", "sound",
+        "image", "picture",
+        "video"
+    };
+
     private static readonly HashSet<string> AudioFieldNames = new(StringComparer.OrdinalIgnoreCase)
         { "audio", "sound" };
 
@@ -51,4 +58,10 @@ public class MediaMerger
             MediaType.Video => ImageFieldNames,
             _ => ImageFieldNames
         };
+
+    public static bool IsAllMediaCardType(CardTypeDefinition cardType)
+    {
+        return cardType.JsonSchemaProperties.Keys.All(
+            k => MediaFieldNames.Contains(k, StringComparer.OrdinalIgnoreCase));
+    }
 }

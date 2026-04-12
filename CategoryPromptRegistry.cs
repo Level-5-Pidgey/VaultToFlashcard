@@ -124,4 +124,42 @@ public class CategoryPromptRegistry
 		var fieldList = string.Join(", ", cardType.JsonSchemaProperties.Keys);
 		return $"Anki {cardType.ModelName} card with fields: {fieldList}";
 	}
+
+	public static JsonElement BuildGroupedJsonSchema(IReadOnlyList<CardTypeDefinition> cardTypes)
+	{
+		var properties = new Dictionary<string, object>();
+
+		foreach (var cardType in cardTypes)
+		{
+			var itemSchema = new Dictionary<string, object>
+			{
+				["type"] = "object",
+				["additionalProperties"] = false,
+				["properties"] = BuildProperties(cardType.JsonSchemaProperties),
+				["required"] = cardType.JsonSchemaProperties.Keys.ToList()
+			};
+
+			properties[cardType.ModelName] = new Dictionary<string, object>
+			{
+				["type"] = "array",
+				["items"] = itemSchema
+			};
+		}
+
+		var schemaObj = new Dictionary<string, object>
+		{
+			["type"] = "object",
+			["properties"] = properties
+		};
+
+		var json = JsonSerializer.Serialize(schemaObj);
+		using var doc = JsonDocument.Parse(json);
+		return doc.RootElement.Clone();
+	}
+
+	public static string BuildGroupedSchemaDescription(IReadOnlyList<CardTypeDefinition> cardTypes)
+	{
+		var typeList = string.Join(", ", cardTypes.Select(ct => ct.ModelName));
+		return $"Anki cards with types: {typeList}. Each type is an array of cards.";
+	}
 }

@@ -728,6 +728,11 @@ public class VaultProcessor(
 				"""- List: [{"text": "The three main concurrency primitives in Go are: <ul><li>{{c1::Goroutines::lightweight threads}}</li><li>{{c2::Channels::communication mechanism}}</li><li>{{c3::Select Statement::multiplexing mechanism}}</li></ul>"}]""");
 		}
 
+		// Add CARD TYPE SELECTION rule
+		systemPrompt.AppendLine();
+		systemPrompt.AppendLine(
+			$"{systemPromptTenantNumber + 1}. CARD TYPE SELECTION: Use whichever card type(s) best serve the content. You may create cards from only one type, multiple types, or none if the content doesn't warrant it.");
+
 		// Add system prompt addendum from config
 		if (config != null && !string.IsNullOrEmpty(config.SystemPromptAddendum))
 		{
@@ -766,66 +771,121 @@ public class VaultProcessor(
 		var relativePath = fileContext.RelativePath;
 		var vaultName = fileContext.VaultName;
 
-		// Use first card type from config (could be extended to pick based on content)
-		var cardTypes = promptConfig.CardTypes;
-		var selectedCardType = cardTypes.First();
-
 		// Extract media from content before sending to AI
 		var extracted = MediaExtractor.Extract(content, fileContext.VaultPath, fileContext.AssetsPath);
 		var cleanedContent = extracted.CleanedContent;
 		var mediaItems = extracted.Media;
 
-		var promptMessages = GetPromptMessages(cleanedContent, promptConfig, relativePath, header);
+		List<ChatMessage> promptMessages = GetPromptMessages(cleanedContent, promptConfig, relativePath, header).ToList();
 
-		// Build JSON schema for the selected card type
-		var schema = CategoryPromptRegistry.BuildJsonSchema(selectedCardType);
-		var schemaDescription = CategoryPromptRegistry.BuildSchemaDescription(selectedCardType);
+		// Build grouped JSON schema from all configured card types
+		var allCardTypes = promptConfig.CardTypes;
+		var groupedSchema = CategoryPromptRegistry.BuildGroupedJsonSchema(allCardTypes);
+		var schemaDescription = CategoryPromptRegistry.BuildGroupedSchemaDescription(allCardTypes);
 
 		var options = new ChatOptions
 		{
-			ResponseFormat = ChatResponseFormat.ForJsonSchema(schema, selectedCardType.ModelName, schemaDescription),
+			ResponseFormat = ChatResponseFormat.ForJsonSchema(groupedSchema, allCardTypes.First().ModelName, schemaDescription),
 			Temperature = 0.15f
 		};
 
-		var response = await chatClient.GetResponseAsync(promptMessages, options);
+		const int MaxRetriesForInvalidCards = 3;
+		var invalidCardRetryCount = 0;
 
-		if (response.FinishReason != ChatFinishReason.Stop)
+		// Retry-on-failure loop: retry until at least one valid card or a schema-valid empty response
+		while (true)
 		{
-			AnsiConsole.MarkupLine(
-				$"[red]Error generating flashcards for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
-			return Array.Empty<DynamicFlashcard>();
-		}
+			var response = await chatClient.GetResponseAsync(promptMessages, options);
 
-		try
-		{
-			var cards = JsonSerializer.Deserialize<JsonElement[]>(response.Text) ?? [];
-			var result = cards.Select(card =>
+			if (response.FinishReason != ChatFinishReason.Stop)
 			{
-				var fields = new Dictionary<string, string>();
-
-				// Extract fields based on the schema properties
-				foreach (var prop in selectedCardType.JsonSchemaProperties.Keys)
-					if (card.TryGetProperty(prop, out var propValue) && propValue.ValueKind == JsonValueKind.String)
-						fields[prop] = propValue.GetString() ?? "";
-
-				return new DynamicFlashcard(selectedCardType.ModelName, fields,
-					CreateObsidianDeeplink(vaultName, relativePath, header));
-			}).ToList();
-
-			if (mediaItems.Count > 0)
-			{
-				MediaMerger.Merge(result, mediaItems);
+				AnsiConsole.MarkupLine(
+					$"[red]Error generating flashcards for chunk '{Markup.Escape(header)}': {response.FinishReason}[/]");
+				return Array.Empty<DynamicFlashcard>();
 			}
 
-			return result;
-		}
-		catch (JsonException ex)
-		{
-			AnsiConsole.MarkupLine(
-				$"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
-			AnsiConsole.MarkupLine(
-				$"[red]-- Invalid JSON --[/] {Markup.Escape(response.Text)} [red]------------------[/]");
-			return new List<DynamicFlashcard>();
+			try
+			{
+				using var doc = JsonDocument.Parse(response.Text);
+				var root = doc.RootElement;
+
+				if (root.ValueKind != JsonValueKind.Object)
+				{
+					AnsiConsole.MarkupLine(
+						$"[red]Invalid response for chunk '{Markup.Escape(header)}': expected object[/]");
+					return Array.Empty<DynamicFlashcard>();
+				}
+
+				var allCards = new List<DynamicFlashcard>();
+				var totalInvalid = 0;
+
+				foreach (var cardType in allCardTypes)
+				{
+					var typeName = cardType.ModelName;
+					if (!root.TryGetProperty(typeName, out var cardArray) || cardArray.ValueKind != JsonValueKind.Array)
+						continue;
+
+					foreach (var card in cardArray.EnumerateArray())
+					{
+						var validation = CardValidation.ValidateCard(cardType, card);
+						if (!validation.IsValid)
+						{
+							totalInvalid++;
+							continue;
+						}
+
+						var fields = new Dictionary<string, string>();
+						foreach (var prop in cardType.JsonSchemaProperties.Keys)
+							if (card.TryGetProperty(prop, out var propValue) && propValue.ValueKind == JsonValueKind.String)
+								fields[prop] = propValue.GetString() ?? "";
+
+						allCards.Add(new DynamicFlashcard(typeName, fields,
+							CreateObsidianDeeplink(vaultName, relativePath, header)));
+					}
+				}
+
+				if (totalInvalid > 0)
+				{
+					AnsiConsole.MarkupLine(
+						$"[yellow]Warning: Discarding {totalInvalid} card(s) for chunk '{Markup.Escape(header)}' — unexpected fields[/]");
+
+					if (++invalidCardRetryCount >= MaxRetriesForInvalidCards)
+					{
+						AnsiConsole.MarkupLine(
+							$"[red]Max retries exceeded for chunk '{Markup.Escape(header)}' — skipping. Check your prompt config and card type schemas.[/]");
+						return Array.Empty<DynamicFlashcard>();
+					}
+
+					// Append retry warning to prompt messages and retry once
+					promptMessages = promptMessages.Take(promptMessages.Count - 1).ToList(); // remove last user message
+					promptMessages.Add(new ChatMessage(ChatRole.User,
+						"Warning: previous response had invalid cards. Ensure each card only contains fields that match the type declared in the response. Discard any field not belonging to the declared card type.\n\nContent to convert:\n" + cleanedContent + "\n\nTask: Create atomic Anki flashcards from this content."));
+					continue; // retry
+				}
+
+				// Empty response: accept it as valid
+				if (allCards.Count == 0)
+				{
+					AnsiConsole.MarkupLine(
+						$"[dim]No fact-worthy content in chunk '{Markup.Escape(header)}' — skipping[/]");
+					return Array.Empty<DynamicFlashcard>();
+				}
+
+				if (mediaItems.Count > 0)
+				{
+					MediaMerger.Merge(allCards, mediaItems);
+				}
+
+				return allCards;
+			}
+			catch (JsonException ex)
+			{
+				AnsiConsole.MarkupLine(
+					$"[red]Error deserializing JSON for chunk '{Markup.Escape(header)}': {ex.Message}[/]");
+				AnsiConsole.MarkupLine(
+					$"[red]-- Invalid JSON --[/] {Markup.Escape(response.Text)} [red]------------------[/]");
+				return new List<DynamicFlashcard>();
+			}
 		}
 	}
 

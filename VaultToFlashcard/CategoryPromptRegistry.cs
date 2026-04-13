@@ -211,24 +211,33 @@ public class CategoryPromptRegistry
 	/// Returns all required model names with their template definitions.
 	/// Only includes templates that exist (custom or default).
 	/// </summary>
-	public IReadOnlyCollection<(string Name, CardTemplateDefinition Template)> GetAllRequiredModelsWithTemplates()
+	public IReadOnlyCollection<(string Name, CardTemplateDefinition? Template)> GetAllRequiredModelsWithTemplates()
 	{
-		var result = new Dictionary<string, CardTemplateDefinition>(StringComparer.OrdinalIgnoreCase);
+		var result = new Dictionary<string, CardTemplateDefinition?>(StringComparer.OrdinalIgnoreCase);
 
 		// Add from custom configurations (templates by name reference)
 		foreach (var config in _configurations)
-		foreach (var typeName in config.CardTypes)
-			if (!result.ContainsKey(typeName))
+		{
+			foreach (var typeName in config.CardTypes)
 			{
+				if (result.ContainsKey(typeName))
+				{
+					continue;
+				}
+
 				var template = GetCardTemplate(typeName);
 				if (template != null)
+				{
 					result[typeName] = template;
+				}
 			}
+		}
 
 		// Add default templates
 		foreach (var (name, template) in DefaultTemplates)
-			if (!result.ContainsKey(name))
-				result[name] = template;
+		{
+			result.TryAdd(name, template);
+		}
 
 		return result.Select(kvp => (kvp.Key, kvp.Value)).ToList();
 	}

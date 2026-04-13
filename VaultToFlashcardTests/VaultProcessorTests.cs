@@ -197,7 +197,7 @@ public class VaultProcessorTests
 	[Test]
 	public void EvaluateShouldStudy_Null_ReturnsFalse()
 	{
-		var result = EvaluateShouldStudyMethod.Invoke(null, new object[] { null });
+		var result = EvaluateShouldStudyMethod.Invoke(null, new object?[] { null });
 
 		Assert.That(result, Is.False);
 	}

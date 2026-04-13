@@ -155,6 +155,7 @@ The config file lets you define custom note/card types per category. Each catego
 |------------------------|------------------------------------------------------------------------|
 | `name`                 | Unique name for this card type                                         |
 | `isCloze`              | Whether this is a cloze deletion card type                             |
+| `css`                  | Css stylings to apply to all templates within this card type.          |
 | `templates`            | Array of card templates (Front/Back format for Anki rendering)         |
 | `jsonSchemaProperties` | Fields this card type requires (name → description for AI prompts)     |
 | `exampleOutput`        | JSON example of valid card output (used by AI for formatting guidance) |

@@ -14,6 +14,7 @@ public class CardTemplateDefinition
 {
 	[JsonPropertyName("name")] public string Name { get; set; } = "";
 	[JsonPropertyName("templates")] public List<CardTemplateItem> Templates { get; set; } = new();
+	[JsonPropertyName("css")] public string? Css { get; set; } = "";
 	[JsonPropertyName("isCloze")] public bool IsCloze { get; set; } = false;
 
 	[JsonPropertyName("jsonSchemaProperties")]

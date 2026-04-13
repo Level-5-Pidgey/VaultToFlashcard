@@ -156,7 +156,7 @@ public class AnkiConnectClient
 	}
 
 	public async Task EnsureModelExistsAsync(string modelName, IEnumerable<string> requiredFields,
-		List<CardTemplate>? cardTemplates, bool? isCloze, bool readOnly)
+		List<CardTemplate>? cardTemplates, string? css, bool? isCloze, bool readOnly)
 	{
 		if (readOnly)
 		{
@@ -170,7 +170,7 @@ public class AnkiConnectClient
 		if (!existingModels.Contains(modelName))
 		{
 			AnsiConsole.MarkupLine($"[yellow]Model '{modelName}' not found. Creating it...[/]");
-			await CreateModelAsync(modelName, requiredFields.ToList(), cardTemplates, isCloze ?? false);
+			await CreateModelAsync(modelName, requiredFields.ToList(), cardTemplates, css ?? "", isCloze ?? false);
 		}
 		else
 		{
@@ -179,6 +179,7 @@ public class AnkiConnectClient
 	}
 
 	private async Task CreateModelAsync(string modelName, List<string> fieldNames, List<CardTemplate>? cardTemplates,
+		string css,
 		bool isCloze)
 	{
 		var templates = cardTemplates ?? new List<CardTemplate>
@@ -189,8 +190,9 @@ public class AnkiConnectClient
 		var action = new AnkiAction("createModel", new
 		{
 			modelName,
+			css,
 			inOrderFields = fieldNames,
-			isCloze = isCloze,
+			isCloze,
 			cardTemplates = templates.Select(t => new { t.Name, t.Front, t.Back }).ToArray()
 		});
 		await PostAsync(action);

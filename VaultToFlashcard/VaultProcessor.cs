@@ -234,15 +234,21 @@ public class VaultProcessor(
 		var requiredModels = PromptRegistry.GetAllRequiredModelsWithTemplates();
 
 		foreach (var (modelName, templateDefinition) in requiredModels)
-			if (templateDefinition != null)
+		{
+			if (templateDefinition == null)
 			{
-				var requiredFields = templateDefinition.JsonSchemaProperties.Keys.Append("Source").ToList();
-				var cardTemplates = templateDefinition.Templates.Select(t =>
-					new CardTemplate(t.Name, t.Front, t.Back)).ToList();
-
-				await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, cardTemplates,
-					templateDefinition.IsCloze, readOnly);
+				continue;
 			}
+
+			var requiredFields = templateDefinition.JsonSchemaProperties.Keys.Append("Source").ToList();
+			var cardTemplates = templateDefinition.Templates
+				.Select(t =>
+					new CardTemplate(t.Name, t.Front, t.Back))
+				.ToList();
+
+			await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, cardTemplates, templateDefinition.Css,
+				templateDefinition.IsCloze, readOnly);
+		}
 	}
 
 	private async Task<int> CleanUpOrphanedNotesAsync(ConcurrentBag<long> validNoteIds, ProgressTask task)

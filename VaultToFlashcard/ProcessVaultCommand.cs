@@ -41,12 +41,25 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 			try
 			{
 				var json = await File.ReadAllTextAsync(settings.ConfigPath);
-				var configs = JsonSerializer.Deserialize<List<CategoryPromptConfiguration>>(json);
-				if (configs != null)
+
+				// Try new format first (VaultPromptConfiguration with cardTypes + categories)
+				var vaultConfig = JsonSerializer.Deserialize<VaultPromptConfiguration>(json);
+				if (vaultConfig != null && vaultConfig.CardTypes.Count > 0)
 				{
-					promptRegistry = new CategoryPromptRegistry(configs);
+					promptRegistry = new CategoryPromptRegistry(vaultConfig);
 					AnsiConsole.MarkupLine(
-						$"[green]Loaded {configs.Count} category prompt configurations from '{settings.ConfigPath}'[/]");
+						$"[green]Loaded {vaultConfig.Categories.Count} categories and {vaultConfig.CardTypes.Count} card types from '{settings.ConfigPath}'[/]");
+				}
+				else
+				{
+					// Fall back to old format (list of CategoryPromptConfiguration)
+					var configs = JsonSerializer.Deserialize<List<CategoryPromptConfiguration>>(json);
+					if (configs != null)
+					{
+						promptRegistry = new CategoryPromptRegistry(configs);
+						AnsiConsole.MarkupLine(
+							$"[yellow]Loaded {configs.Count} categories (legacy format - consider migrating to new format)[/]");
+					}
 				}
 			}
 			catch (Exception ex)

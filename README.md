@@ -69,55 +69,96 @@ vault-to-flashcard --vault "C:\MyVault" --read-only
 
 The config file lets you define custom note/card types per category. Each category matches a value from the note's `categories` YAML frontmatter property.
 
+### New Format (Recommended)
+
+The new format uses a top-level `cardTypes` array to define reusable card templates that multiple categories can reference by name:
+
 ```json
-[
-  {
-    "category": "Japanese",
-    "priority": 1,
-    "systemPromptAddendum": "Focus on breaking down notes into easy-to-understand examples.",
-    "assistantPromptAddendum": "Ensure that all kanji have accompanying Furigana using the furigna syntax: \"大丈夫[だいじょうぶ].\"",
-    "skipBasicTypes": true,
-    "cardTypes": [
-      {
-        "modelName": "Japanese Sentences & Expressions",
-        "jsonSchemaProperties": {
-          "Japanese Sentence": "The sentence in Japanese",
-          "English Translation": "The translation(s), separated by semicolon",
-          "Audio": "Optional relevant audio file",
-          "Notes": "Additional context"
-        },
-        "exampleOutput": "{\"Japanese Sentence\": \"何故[なぜ]\", \"English Translation\": \"why (=どうして)\", \"Notes\": \"Only used in formal/literary contexts\"}"
-      },
-      {
-        "modelName": "Japanese Vocabulary",
-        "jsonSchemaProperties": {
-          "Kanji": "The Kanji representation of the vocabulary",
-          "Reading": "The Kana representation of the Kanji",
-          "Meaning": "Optional relevant audio file",
-          "Word Class": "Noun, Verb-u, Adjective",
-          "Audio": "Supplementary audio clip for correct pronunciation.",
-          "Mnemonic": "Image/text to remember the content more easily"
-        },
-        "exampleOutput": "{\"Kanji\": \"雨\", \"Reading\": \"あめ\", \"Meaning\": \"rain\", \"Word Class\": \"Noun\", \"Mnemonic\": \"The kanji \"雨\" looks like rain on a window!\", }"
-      }
-    ]
-  }
-]
+{
+  "cardTypes": [
+    {
+      "name": "Basic",
+      "isCloze": false,
+      "templates": [
+        { "name": "Basic", "front": "{{Front}}", "back": "{{Back}}" }
+      ]
+    },
+    {
+      "name": "Cloze",
+      "isCloze": true,
+      "templates": [
+        { "name": "Cloze", "front": "{{text}}", "back": "{{text}}" }
+      ]
+    },
+    {
+      "name": "Reversed",
+      "isCloze": false,
+      "templates": [
+        { "name": "Forward", "front": "{{Front}}", "back": "{{Back}}" },
+        { "name": "Backward", "front": "{{Back}}", "back": "{{Front}}" }
+      ]
+    },
+    {
+      "name": "Japanese Vocabulary",
+      "isCloze": false,
+      "templates": [
+        { "name": "Japanese Vocabulary", "front": "{{Kanji}}", "back": "{{Reading}} — {{Meaning}}" }
+      ]
+    }
+  ],
+  "categories": [
+    {
+      "category": "Programming",
+      "priority": 1,
+      "cardTypes": ["Basic", "Cloze"],
+      "systemPromptAddendum": "Focus on code examples.",
+      "skipBasicTypes": false
+    },
+    {
+      "category": "Japanese",
+      "priority": 2,
+      "cardTypes": ["Japanese Vocabulary"],
+      "systemPromptAddendum": "Focus on breaking down notes into easy-to-understand examples.",
+      "assistantPromptAddendum": "Ensure that all kanji have accompanying Furigana using the furigana syntax: \"大丈夫[だいじょうぶ].\"",
+      "skipBasicTypes": true
+    }
+  ]
+}
 ```
 
-### Fields
+#### Top-Level Fields
 
-| Field                              | Description                                                                                        |
-|------------------------------------|----------------------------------------------------------------------------------------------------|
-| `category`                         | Value from the note's `categories` frontmatter                                                     |
-| `priority`                         | Higher priority categories are matched first                                                       |
-| `systemPromptAddendum`             | Extra instructions for the AI system prompt                                                        |
-| `assistantPromptAddendum`          | Extra instructions appended to the user prompt                                                     |
-| `cardTypes[].modelName`            | Name of your Anki note model                                                                       |
-| `cardTypes[].jsonSchemaProperties` | Fields your note model requires (name → example)                                                   |
-| `cardTypes[].exampleOutput`        | JSON example of valid card output                                                                  |
-| `skipBasicTypes`                   | _(Optional, default `false`)_ Skips adding the "Basic" and "Cloze" types to the `cardTypes` array. |
+| Field       | Description                                      |
+|-------------|------------------------------------------------|
+| `cardTypes` | Array of reusable card template definitions      |
+| `categories`| Array of category-specific configurations       |
+
+#### Card Type Definition Fields
+
+| Field       | Description                                      |
+|-------------|------------------------------------------------|
+| `name`      | Unique name for this card type                  |
+| `isCloze`   | Whether this is a cloze deletion card type      |
+| `templates` | Array of card templates (Front/Back format)     |
+
+#### Card Template Fields
+
+| Field | Description                                      |
+|-------|------------------------------------------------|
+| `name`| Name of this specific template (within the card type) |
+| `front`| Front template using Anki field syntax (e.g., `{{Front}}`) |
+| `back`| Back template using Anki field syntax            |
+
+#### Category Fields
+
+| Field                   | Description                                      |
+|-------------------------|------------------------------------------------|
+| `category`              | Value from the note's `categories` frontmatter  |
+| `priority`              | Higher priority categories are matched first    |
+| `cardTypes`             | Array of card type names to use for this category |
+| `systemPromptAddendum`  | Extra instructions for the AI system prompt     |
+| `assistantPromptAddendum`| Extra instructions appended to the user prompt |
+| `skipBasicTypes`        | _(Optional, default `false`)_ Skips adding default Basic/Cloze types |
 
 Without a config, the tool defaults to simple `Basic` and `Cloze` note types.
-
 

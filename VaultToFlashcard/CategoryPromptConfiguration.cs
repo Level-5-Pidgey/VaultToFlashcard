@@ -3,6 +3,20 @@ using System.Text.Json.Serialization;
 
 namespace VaultToFlashcard;
 
+public class CardTemplateItem
+{
+	[JsonPropertyName("name")] public string Name { get; set; } = "";
+	[JsonPropertyName("front")] public string Front { get; set; } = "";
+	[JsonPropertyName("back")] public string Back { get; set; } = "";
+}
+
+public class CardTemplateDefinition
+{
+	[JsonPropertyName("name")] public string Name { get; set; } = "";
+	[JsonPropertyName("templates")] public List<CardTemplateItem> Templates { get; set; } = new();
+	[JsonPropertyName("isCloze")] public bool IsCloze { get; set; } = false;
+}
+
 public class CardTypeDefinition
 {
 	[JsonPropertyName("modelName")] public string ModelName { get; set; } = "";
@@ -11,6 +25,10 @@ public class CardTypeDefinition
 	public Dictionary<string, string> JsonSchemaProperties { get; set; } = new();
 
 	[JsonPropertyName("exampleOutput")] public string ExampleOutput { get; set; } = "";
+
+	[JsonPropertyName("front")] public string? Front { get; set; }
+	[JsonPropertyName("back")] public string? Back { get; set; }
+	[JsonPropertyName("isCloze")] public bool IsCloze { get; set; } = false;
 }
 
 public class CategoryPromptConfiguration
@@ -25,8 +43,22 @@ public class CategoryPromptConfiguration
 	[JsonPropertyName("assistantPromptAddendum")]
 	public string AssistantPromptAddendum { get; set; } = "";
 
-		[JsonPropertyName("skipBasicTypes")]
+	[JsonPropertyName("skipBasicTypes")]
 	public bool SkipBasicTypes { get; set; } = false;
 
-	[JsonPropertyName("cardTypes")] public List<CardTypeDefinition> CardTypes { get; set; } = new();
+	[JsonPropertyName("cardTypes")]
+	public List<string> CardTypeNames { get; set; } = new();
+
+	[JsonPropertyName("cardTypeDefinitions")]
+	public List<CardTypeDefinition> CardTypeDefinitions { get; set; } = new();
+
+	// For backward compatibility - renamed from CardTypes
+	[JsonPropertyName("cardTypesInline")]
+	public List<CardTypeDefinition> CardTypesInline { get; set; } = new();
+}
+
+public class VaultPromptConfiguration
+{
+	[JsonPropertyName("cardTypes")] public List<CardTemplateDefinition> CardTypes { get; set; } = new();
+	[JsonPropertyName("categories")] public List<CategoryPromptConfiguration> Categories { get; set; } = new();
 }

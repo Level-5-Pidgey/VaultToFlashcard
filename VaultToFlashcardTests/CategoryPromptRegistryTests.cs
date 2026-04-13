@@ -95,7 +95,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Programming",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "Code", JsonSchemaProperties = new() { ["snippet"] = "code snippet" } }
                 }
@@ -118,7 +118,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Programming",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "Code", JsonSchemaProperties = new() { ["snippet"] = "code snippet" } }
                 }
@@ -140,7 +140,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Test",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "LowPriority", JsonSchemaProperties = new() { ["field"] = "desc" } }
                 }
@@ -149,7 +149,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Programming",
                 Priority = 10,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "HighPriority", JsonSchemaProperties = new() { ["field"] = "desc" } }
                 }
@@ -164,14 +164,14 @@ public class CategoryPromptRegistryTests
         {
             Assert.That(result, Is.Not.Null);
             Assert.That(result!.Priority, Is.EqualTo(10));
-            Assert.That(result.CardTypes[0].ModelName, Is.EqualTo("HighPriority"));
+            Assert.That(result.CardTypeDefinitions[0].ModelName, Is.EqualTo("HighPriority"));
         });
     }
 
     [Test]
     public void FindBestMatch_NullCategories_ReturnsNull()
     {
-        var registry = new CategoryPromptRegistry();
+        var registry = new CategoryPromptRegistry((IEnumerable<CategoryPromptConfiguration>?)null);
 
         var result = registry.FindBestMatch(null);
 
@@ -181,7 +181,7 @@ public class CategoryPromptRegistryTests
     [Test]
     public void FindBestMatch_EmptyCategories_ReturnsNull()
     {
-        var registry = new CategoryPromptRegistry();
+        var registry = new CategoryPromptRegistry((IEnumerable<CategoryPromptConfiguration>?)null);
 
         var result = registry.FindBestMatch(Array.Empty<string>());
 
@@ -197,7 +197,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Programming",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "Code", JsonSchemaProperties = new() { ["snippet"] = "code snippet" } }
                 }
@@ -210,7 +210,7 @@ public class CategoryPromptRegistryTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Category, Is.EqualTo("Default"));
-            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze" }));
+            Assert.That(result.CardTypeDefinitions.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze" }));
         });
     }
 
@@ -223,7 +223,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Programming",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "Code", JsonSchemaProperties = new() { ["snippet"] = "code snippet" }, ExampleOutput = "{\"snippet\":\"...\"}" }
                 }
@@ -236,7 +236,7 @@ public class CategoryPromptRegistryTests
         Assert.Multiple(() =>
         {
             Assert.That(result.Category, Is.EqualTo("Programming"));
-            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze", "Code" }));
+            Assert.That(result.CardTypeDefinitions.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze", "Code" }));
         });
     }
 
@@ -249,7 +249,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Programming",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new()
                     {
@@ -264,10 +264,10 @@ public class CategoryPromptRegistryTests
 
         var result = registry.GetEffectiveConfiguration(new[] { "Programming" });
 
-        var clozeCard = result.CardTypes.First(ct => ct.ModelName == "Cloze");
+        var clozeCard = result.CardTypeDefinitions.First(ct => ct.ModelName == "Cloze");
         Assert.Multiple(() =>
         {
-            Assert.That(result.CardTypes.Count, Is.EqualTo(2)); // Basic + modified Cloze
+            Assert.That(result.CardTypeDefinitions.Count, Is.EqualTo(2)); // Basic + modified Cloze
             Assert.That(clozeCard.JsonSchemaProperties["text"], Is.EqualTo("custom cloze description"));
             Assert.That(clozeCard.ExampleOutput, Is.EqualTo("{\"text\":\"custom\"}"));
         });
@@ -282,7 +282,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Config1",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "CustomType1", JsonSchemaProperties = new() { ["f1"] = "d1" } },
                     new() { ModelName = "SharedType", JsonSchemaProperties = new() { ["f2"] = "d2" } }
@@ -292,7 +292,7 @@ public class CategoryPromptRegistryTests
             {
                 Category = "Config2",
                 Priority = 1,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "CustomType2", JsonSchemaProperties = new() { ["f3"] = "d3" } },
                     new() { ModelName = "SharedType", JsonSchemaProperties = new() { ["f4"] = "d4" } }
@@ -319,7 +319,7 @@ public class CategoryPromptRegistryTests
                 Category = "Custom",
                 Priority = 1,
                 SkipBasicTypes = true,
-                CardTypes = new List<CardTypeDefinition>
+                CardTypeDefinitions = new List<CardTypeDefinition>
                 {
                     new() { ModelName = "CustomCard", JsonSchemaProperties = new() { ["field"] = "custom field" } }
                 }
@@ -331,9 +331,9 @@ public class CategoryPromptRegistryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "CustomCard" }));
-            Assert.That(result.CardTypes.Any(ct => ct.ModelName == "Basic"), Is.False);
-            Assert.That(result.CardTypes.Any(ct => ct.ModelName == "Cloze"), Is.False);
+            Assert.That(result.CardTypeDefinitions.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "CustomCard" }));
+            Assert.That(result.CardTypeDefinitions.Any(ct => ct.ModelName == "Basic"), Is.False);
+            Assert.That(result.CardTypeDefinitions.Any(ct => ct.ModelName == "Cloze"), Is.False);
         });
     }
 
@@ -396,7 +396,7 @@ public class CategoryPromptRegistryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.CardTypes.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze" }));
+            Assert.That(result.CardTypeDefinitions.Select(ct => ct.ModelName), Is.EquivalentTo(new[] { "Basic", "Cloze" }));
         });
     }
 }

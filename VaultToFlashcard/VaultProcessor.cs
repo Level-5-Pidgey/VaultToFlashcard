@@ -27,7 +27,7 @@ public class VaultProcessor(
 	ILogger? logger = null)
 {
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
-	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
+	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry((IEnumerable<CategoryPromptConfiguration>?)null);
 	private readonly MediaExtractor MediaExtractor = new();
 	private readonly MediaMerger MediaMerger = new();
 	private ConcurrentDictionary<string, CacheEntry> Cache = new();
@@ -230,12 +230,12 @@ public class VaultProcessor(
 				"[yellow][[Read-Only]][/] Would ensure 'Source' field exists on 'Basic' and 'Cloze' models.");
 		}
 
-		// Get all required model names from the registry
-		var requiredModels = PromptRegistry.GetAllRequiredModelNames();
+		// Get all required model names with their templates from the registry
+		var requiredModels = PromptRegistry.GetAllRequiredModelsWithTemplates();
 
-		foreach (var modelName in requiredModels)
+		foreach (var (modelName, templateDefinition) in requiredModels)
 		{
-			// Find the card type definition for this model
+			// Find the card type definition for field names
 			CardTypeDefinition? cardType = null;
 
 			// Check custom configurations
@@ -244,7 +244,7 @@ public class VaultProcessor(
 				var matchedConfig = PromptRegistry.FindBestMatch(new[] { config });
 				if (matchedConfig != null)
 				{
-					cardType = matchedConfig.CardTypes.FirstOrDefault(ct => ct.ModelName == modelName);
+					cardType = matchedConfig.CardTypeDefinitions.FirstOrDefault(ct => ct.ModelName == modelName);
 					if (cardType != null) break;
 				}
 			}
@@ -253,13 +253,34 @@ public class VaultProcessor(
 			if (cardType == null)
 			{
 				var defaultConfig = PromptRegistry.GetDefaultConfiguration();
-				cardType = defaultConfig.CardTypes.FirstOrDefault(ct => ct.ModelName == modelName);
+				cardType = defaultConfig.CardTypeDefinitions.FirstOrDefault(ct => ct.ModelName == modelName);
 			}
 
 			if (cardType != null)
 			{
 				var requiredFields = cardType.JsonSchemaProperties.Keys.Append("Source").ToList();
-				await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, readOnly);
+
+				// Build card templates from template definition
+				List<CardTemplate>? cardTemplates = null;
+				bool? isCloze = null;
+
+				if (templateDefinition != null)
+				{
+					isCloze = templateDefinition.IsCloze;
+					cardTemplates = templateDefinition.Templates.Select(t =>
+						new CardTemplate(t.Name, t.Front, t.Back)).ToList();
+				}
+				else if (cardType.Front != null && cardType.Back != null)
+				{
+					// Fall back to inline definition
+					isCloze = cardType.IsCloze;
+					cardTemplates = new List<CardTemplate>
+					{
+						new CardTemplate(modelName, cardType.Front, cardType.Back)
+					};
+				}
+
+				await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, cardTemplates, isCloze, readOnly);
 			}
 		}
 	}
@@ -418,7 +439,7 @@ public class VaultProcessor(
 			var noteCategories = ExtractCategories(frontMatter);
 
 			var promptConfig = PromptRegistry.GetEffectiveConfiguration(noteCategories);
-			var cardTypes = promptConfig.CardTypes.Select(x => x.ModelName);
+			var cardTypes = promptConfig.CardTypeDefinitions.Select(x => x.ModelName);
 			var tree = new Tree(
 				$"[blue]{Markup.Escape(relativePath)}[/] [Grey70]({Markup.Escape(string.Join(", ", cardTypes))})[/]");
 
@@ -603,10 +624,13 @@ public class VaultProcessor(
 			if (cachedEntry.ContentHash == contentHash)
 			{
 				// Content unchanged - just unsuspend
-				if (!readOnly && cardIds.Any())
+				if (cardIds.Any())
 				{
-					await ankiClient.UnsuspendCardsAsync(cardIds);
-					Cache[cacheKey] = cachedEntry with { IsSuspended = false };
+					if (!readOnly)
+					{
+						await ankiClient.UnsuspendCardsAsync(cardIds);
+						Cache[cacheKey] = cachedEntry with { IsSuspended = false };
+					}
 					summary.NotesUnsuspended++;
 				}
 
@@ -657,10 +681,13 @@ public class VaultProcessor(
 		else
 		{
 			// Handle suspend
-			if (!readOnly && cardIds.Any())
+			if (cardIds.Any())
 			{
-				await ankiClient.SuspendCardsAsync(cardIds);
-				Cache[cacheKey] = cachedEntry with { IsSuspended = true };
+				if (!readOnly)
+				{
+					await ankiClient.SuspendCardsAsync(cardIds);
+					Cache[cacheKey] = cachedEntry with { IsSuspended = true };
+				}
 				summary.NotesSuspended++;
 			}
 
@@ -698,7 +725,7 @@ public class VaultProcessor(
 		var assistantPrompt = new StringBuilder();
 
 		// Use configuration if available, otherwise use default
-		var cardTypes = config?.CardTypes ?? PromptRegistry.GetDefaultConfiguration().CardTypes;
+		var cardTypes = config?.CardTypeDefinitions ?? PromptRegistry.GetDefaultConfiguration().CardTypeDefinitions;
 
 		if (cardTypes.Any(x => x.ModelName == "Cloze"))
 		{
@@ -793,7 +820,7 @@ public class VaultProcessor(
 		var mediaItems = extracted.Media;
 
 		// Identify all-media card types (these skip AI inference)
-		var allCardTypes = promptConfig.CardTypes;
+		var allCardTypes = promptConfig.CardTypeDefinitions;
 		var allMediaCardTypes = allCardTypes
 			.Where(MediaMerger.IsAllMediaCardType)
 			.ToList();
@@ -843,7 +870,7 @@ public class VaultProcessor(
 			SystemPromptAddendum = promptConfig.SystemPromptAddendum,
 			AssistantPromptAddendum = promptConfig.AssistantPromptAddendum,
 			SkipBasicTypes = promptConfig.SkipBasicTypes,
-			CardTypes = mixedCardTypes
+			CardTypeDefinitions = mixedCardTypes
 		};
 		List<ChatMessage> promptMessages = GetPromptMessages(cleanedContent, mixedConfig, relativePath, header).ToList();
 

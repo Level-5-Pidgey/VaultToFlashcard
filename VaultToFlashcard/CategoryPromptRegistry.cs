@@ -6,6 +6,29 @@ namespace VaultToFlashcard;
 public class CategoryPromptRegistry
 {
 	private readonly List<CategoryPromptConfiguration> _configurations = new();
+	private readonly Dictionary<string, CardTemplateDefinition> _cardTemplates = new();
+
+	private static readonly Dictionary<string, CardTemplateDefinition> DefaultTemplates = new()
+	{
+		["Basic"] = new CardTemplateDefinition
+		{
+			Name = "Basic",
+			IsCloze = false,
+			Templates = new List<CardTemplateItem>
+			{
+				new CardTemplateItem { Name = "Basic", Front = "{{Front}}", Back = "{{Back}}" }
+			}
+		},
+		["Cloze"] = new CardTemplateDefinition
+		{
+			Name = "Cloze",
+			IsCloze = true,
+			Templates = new List<CardTemplateItem>
+			{
+				new CardTemplateItem { Name = "Cloze", Front = "{{text}}", Back = "{{text}}" }
+			}
+		}
+	};
 
 	private static readonly CategoryPromptConfiguration DefaultConfiguration = new()
 	{
@@ -13,7 +36,7 @@ public class CategoryPromptRegistry
 		Priority = -1,
 		SystemPromptAddendum = "",
 		AssistantPromptAddendum = "",
-		CardTypes = new List<CardTypeDefinition>
+		CardTypeDefinitions = new List<CardTypeDefinition>
 		{
 			new()
 			{
@@ -40,14 +63,65 @@ public class CategoryPromptRegistry
 		}
 	};
 
+	public CategoryPromptRegistry(VaultPromptConfiguration? vaultConfig = null)
+	{
+		if (vaultConfig != null)
+		{
+			// Load templates from top-level cardTypes
+			foreach (var template in vaultConfig.CardTypes)
+				_cardTemplates[template.Name] = template;
+
+			// Load categories
+			_configurations.AddRange(vaultConfig.Categories);
+		}
+	}
+
 	public CategoryPromptRegistry(IEnumerable<CategoryPromptConfiguration>? configurations = null)
 	{
-		if (configurations != null) _configurations.AddRange(configurations);
+		if (configurations != null)
+		{
+			foreach (var config in configurations)
+			{
+				_configurations.Add(config);
+				// Also register inline card type definitions as templates
+				foreach (var ct in config.CardTypeDefinitions)
+				{
+					if (!_cardTemplates.ContainsKey(ct.ModelName))
+					{
+						var front = ct.Front ?? $"{{{{{ct.JsonSchemaProperties.Keys.First()}}}}}";
+						var back = ct.Back ?? $"{{{{{ct.JsonSchemaProperties.Keys.Last()}}}}}";
+						_cardTemplates[ct.ModelName] = new CardTemplateDefinition
+						{
+							Name = ct.ModelName,
+							IsCloze = ct.IsCloze,
+							Templates = new List<CardTemplateItem>
+							{
+								new CardTemplateItem
+								{
+									Name = ct.ModelName,
+									Front = front,
+									Back = back
+								}
+							}
+						};
+					}
+				}
+			}
+		}
 	}
 
 	public CategoryPromptConfiguration GetDefaultConfiguration()
 	{
 		return DefaultConfiguration;
+	}
+
+	public CardTemplateDefinition? GetCardTemplate(string name)
+	{
+		if (_cardTemplates.TryGetValue(name, out var template))
+			return template;
+		if (DefaultTemplates.TryGetValue(name, out var defaultTemplate))
+			return defaultTemplate;
+		return null;
 	}
 
 	public CategoryPromptConfiguration GetEffectiveConfiguration(IReadOnlyCollection<string>? noteCategories)
@@ -62,41 +136,76 @@ public class CategoryPromptRegistry
 			Priority = matched.Priority,
 			SystemPromptAddendum = matched.SystemPromptAddendum,
 			AssistantPromptAddendum = matched.AssistantPromptAddendum,
-			CardTypes = matched.SkipBasicTypes
+			CardTypeNames = new List<string>(matched.CardTypeNames),
+			CardTypeDefinitions = matched.SkipBasicTypes
 				? new List<CardTypeDefinition>()
-				: DefaultConfiguration.CardTypes.Select(ct => new CardTypeDefinition
-				  {
-					  ModelName = ct.ModelName,
-					  JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
-					  ExampleOutput = ct.ExampleOutput
-				  }).ToList()
+				: DefaultConfiguration.CardTypeDefinitions.Select(ct => new CardTypeDefinition
+				{
+					ModelName = ct.ModelName,
+					JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
+					ExampleOutput = ct.ExampleOutput
+				}).ToList()
 		};
 
-		// Overlay or add category card types
-		foreach (var categoryCardType in matched.CardTypes)
+		// Overlay or add category card types (from CardTypeNames references)
+		foreach (var typeName in matched.CardTypeNames)
 		{
-			var existing = effective.CardTypes.FirstOrDefault(ct =>
+			var template = GetCardTemplate(typeName);
+			if (template != null)
+			{
+				var existing = effective.CardTypeDefinitions.FirstOrDefault(ct =>
+					ct.ModelName.Equals(typeName, StringComparison.OrdinalIgnoreCase));
+				if (existing != null)
+				{
+					existing.Front = template.Templates.FirstOrDefault()?.Front;
+					existing.Back = template.Templates.FirstOrDefault()?.Back;
+					existing.IsCloze = template.IsCloze;
+				}
+				else
+				{
+					effective.CardTypeDefinitions.Add(new CardTypeDefinition
+					{
+						ModelName = typeName,
+						Front = template.Templates.FirstOrDefault()?.Front,
+						Back = template.Templates.FirstOrDefault()?.Back,
+						IsCloze = template.IsCloze,
+						JsonSchemaProperties = new Dictionary<string, string>()
+					});
+				}
+			}
+		}
+
+		// Overlay or add inline category card type definitions
+		foreach (var categoryCardType in matched.CardTypeDefinitions)
+		{
+			var existing = effective.CardTypeDefinitions.FirstOrDefault(ct =>
 				ct.ModelName.Equals(categoryCardType.ModelName, StringComparison.OrdinalIgnoreCase));
 			if (existing != null)
 			{
 				existing.JsonSchemaProperties = new Dictionary<string, string>(categoryCardType.JsonSchemaProperties);
 				existing.ExampleOutput = categoryCardType.ExampleOutput;
+				if (categoryCardType.Front != null) existing.Front = categoryCardType.Front;
+				if (categoryCardType.Back != null) existing.Back = categoryCardType.Back;
+				existing.IsCloze = categoryCardType.IsCloze;
 			}
 			else
 			{
-				effective.CardTypes.Add(new CardTypeDefinition
+				effective.CardTypeDefinitions.Add(new CardTypeDefinition
 				{
 					ModelName = categoryCardType.ModelName,
 					JsonSchemaProperties = new Dictionary<string, string>(categoryCardType.JsonSchemaProperties),
-					ExampleOutput = categoryCardType.ExampleOutput
+					ExampleOutput = categoryCardType.ExampleOutput,
+					Front = categoryCardType.Front,
+					Back = categoryCardType.Back,
+					IsCloze = categoryCardType.IsCloze
 				});
 			}
 		}
 
 		// If skipBasicTypes but no custom types added, revert to defaults
-		if (matched.SkipBasicTypes && effective.CardTypes.Count == 0)
+		if (matched.SkipBasicTypes && effective.CardTypeDefinitions.Count == 0)
 		{
-			effective.CardTypes = DefaultConfiguration.CardTypes.Select(ct => new CardTypeDefinition
+			effective.CardTypeDefinitions = DefaultConfiguration.CardTypeDefinitions.Select(ct => new CardTypeDefinition
 			{
 				ModelName = ct.ModelName,
 				JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
@@ -138,13 +247,42 @@ public class CategoryPromptRegistry
 
 		// Add from custom configurations
 		foreach (var config in _configurations)
-		foreach (var cardType in config.CardTypes)
+		foreach (var cardType in config.CardTypeDefinitions)
 			models.Add(cardType.ModelName);
 
 		// Add from default configuration
-		foreach (var cardType in DefaultConfiguration.CardTypes) models.Add(cardType.ModelName);
+		foreach (var cardType in DefaultConfiguration.CardTypeDefinitions) models.Add(cardType.ModelName);
 
 		return models;
+	}
+
+	public IReadOnlyCollection<(string Name, CardTemplateDefinition? Template)> GetAllRequiredModelsWithTemplates()
+	{
+		var result = new Dictionary<string, CardTemplateDefinition?>();
+
+		// Add from custom configurations
+		foreach (var config in _configurations)
+		{
+			foreach (var typeName in config.CardTypeNames)
+			{
+				if (!result.ContainsKey(typeName))
+					result[typeName] = GetCardTemplate(typeName);
+			}
+			foreach (var ct in config.CardTypeDefinitions)
+			{
+				if (!result.ContainsKey(ct.ModelName))
+					result[ct.ModelName] = GetCardTemplate(ct.ModelName);
+			}
+		}
+
+		// Add default templates
+		foreach (var (name, template) in DefaultTemplates)
+		{
+			if (!result.ContainsKey(name))
+				result[name] = template;
+		}
+
+		return result.Select(kvp => (kvp.Key, kvp.Value)).ToList();
 	}
 
 	private static JsonElement BuildProperties(Dictionary<string, string> properties, HashSet<string>? excludeFields = null)

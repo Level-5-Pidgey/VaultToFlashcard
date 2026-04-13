@@ -155,7 +155,7 @@ public class AnkiConnectClient
 		return new List<string>();
 	}
 
-	public async Task EnsureModelExistsAsync(string modelName, IEnumerable<string> requiredFields, bool readOnly)
+	public async Task EnsureModelExistsAsync(string modelName, IEnumerable<string> requiredFields, List<CardTemplate>? cardTemplates, bool? isCloze, bool readOnly)
 	{
 		if (readOnly)
 		{
@@ -169,7 +169,7 @@ public class AnkiConnectClient
 		if (!existingModels.Contains(modelName))
 		{
 			AnsiConsole.MarkupLine($"[yellow]Model '{modelName}' not found. Creating it...[/]");
-			await CreateModelAsync(modelName, requiredFields.ToList());
+			await CreateModelAsync(modelName, requiredFields.ToList(), cardTemplates, isCloze ?? false);
 		}
 		else
 		{
@@ -177,14 +177,19 @@ public class AnkiConnectClient
 		}
 	}
 
-	private async Task CreateModelAsync(string modelName, List<string> fieldNames)
+	private async Task CreateModelAsync(string modelName, List<string> fieldNames, List<CardTemplate>? cardTemplates, bool isCloze)
 	{
-		// Create a new note type based on "Basic" model
+		var templates = cardTemplates ?? new List<CardTemplate>
+		{
+			new CardTemplate("Basic", "{{Front}}", "{{Back}}")
+		};
+
 		var action = new AnkiAction("createModel", new
 		{
 			modelName,
 			inOrderFields = fieldNames,
-			req = fieldNames.Select((_, i) => new object[] { i, "any", new string[] { } }).ToArray()
+			isCloze = isCloze,
+			cardTemplates = templates.Select(t => new { t.Name, t.Front, t.Back }).ToArray()
 		});
 		await PostAsync(action);
 		AnsiConsole.MarkupLine(
@@ -324,7 +329,9 @@ public class AnkiConnectClient
 			if (root.ValueKind != JsonValueKind.Object) return default;
 
 			if (root.TryGetProperty("error", out var errorElement) && errorElement.ValueKind != JsonValueKind.Null)
+			{
 				throw new Exception($"AnkiConnect error: {errorElement.GetString()}");
+			}
 
 			return root.TryGetProperty("result", out var resultElement) ? resultElement.Clone() : default;
 		}
@@ -370,3 +377,9 @@ public record AnkiNoteInfo(
 );
 
 public record AnkiNotesInfoResult(IReadOnlyCollection<AnkiNoteInfo> Succeeded, IReadOnlyCollection<long> NotFound);
+
+public record CardTemplate(
+	[property: JsonPropertyName("Name")] string Name,
+	[property: JsonPropertyName("Front")] string Front,
+	[property: JsonPropertyName("Back")] string Back
+);

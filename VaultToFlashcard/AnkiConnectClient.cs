@@ -283,13 +283,11 @@ public class AnkiConnectClient
 	public async Task<IReadOnlyCollection<long>> GetCardsForNotesAsync(IReadOnlyCollection<long> noteIds)
 	{
 		if (!noteIds.Any()) return Array.Empty<long>();
-		var action = new AnkiAction("cardsForNotes", new { notes = noteIds });
-		var result = await PostAsync(action);
-		return result.ValueKind == JsonValueKind.Array
-			? result.EnumerateArray()
-				.Select(e => e.GetInt64())
-				.ToArray()
-			: [];
+		var notesInfo = await NotesInfoAsync(noteIds);
+		return notesInfo
+			.Where(n => n.Cards != null)
+			.SelectMany(n => n.Cards!)
+			.ToArray();
 	}
 
 
@@ -367,7 +365,8 @@ public record AnkiMediaEntry(
 
 public record AnkiNoteInfo(
 	[property: JsonPropertyName("noteId")] long NoteId,
-	[property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags
+	[property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags,
+	[property: JsonPropertyName("cards")] IReadOnlyCollection<long>? Cards = null
 );
 
 public record AnkiNotesInfoResult(IReadOnlyCollection<AnkiNoteInfo> Succeeded, IReadOnlyCollection<long> NotFound);

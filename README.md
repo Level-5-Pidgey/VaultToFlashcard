@@ -69,10 +69,6 @@ vault-to-flashcard --vault "C:\MyVault" --read-only
 
 The config file lets you define custom note/card types per category. Each category matches a value from the note's `categories` YAML frontmatter property.
 
-### New Format (Recommended)
-
-The new format uses a top-level `cardTypes` array to define reusable card templates that multiple categories can reference by name:
-
 ```json
 {
   "cardTypes": [
@@ -81,14 +77,23 @@ The new format uses a top-level `cardTypes` array to define reusable card templa
       "isCloze": false,
       "templates": [
         { "name": "Basic", "front": "{{Front}}", "back": "{{Back}}" }
-      ]
+      ],
+      "jsonSchemaProperties": {
+        "front": "The question or prompt for the front of the card",
+        "back": "The answer for the back of the card"
+      },
+      "exampleOutput": "{\"front\": \"When should a Trie be used over a Hash Map?\", \"back\": \"When you need efficient prefix-based searching/auto-complete.\"}"
     },
     {
       "name": "Cloze",
       "isCloze": true,
       "templates": [
         { "name": "Cloze", "front": "{{text}}", "back": "{{text}}" }
-      ]
+      ],
+      "jsonSchemaProperties": {
+        "text": "Content with cloze deletions using {{c1::answer::hint}} format. Must have at least two clozes."
+      },
+      "exampleOutput": "{\"text\": \"The three main concurrency primitives in Go are: {{c1::Goroutines::lightweight threads}}, {{c2::Channels::communication mechanism}}, and {{c3::Select Statement::multiplexing mechanism}}\"}"
     },
     {
       "name": "Reversed",
@@ -96,14 +101,25 @@ The new format uses a top-level `cardTypes` array to define reusable card templa
       "templates": [
         { "name": "Forward", "front": "{{Front}}", "back": "{{Back}}" },
         { "name": "Backward", "front": "{{Back}}", "back": "{{Front}}" }
-      ]
+      ],
+      "jsonSchemaProperties": {
+        "front": "The question or prompt",
+        "back": "The answer"
+      },
+      "exampleOutput": "{\"front\": \"What is photosynthesis?\", \"back\": \"The process by which plants convert sunlight into energy.\"}"
     },
     {
       "name": "Japanese Vocabulary",
       "isCloze": false,
       "templates": [
         { "name": "Japanese Vocabulary", "front": "{{Kanji}}", "back": "{{Reading}} — {{Meaning}}" }
-      ]
+      ],
+      "jsonSchemaProperties": {
+        "Kanji": "The Kanji representation of the vocabulary",
+        "Reading": "The Kana representation of the Kanji",
+        "Meaning": "The English meaning of the word"
+      },
+      "exampleOutput": "{\"Kanji\": \"雨\", \"Reading\": \"あめ\", \"Meaning\": \"rain\"}"
     }
   ],
   "categories": [
@@ -128,37 +144,39 @@ The new format uses a top-level `cardTypes` array to define reusable card templa
 
 #### Top-Level Fields
 
-| Field       | Description                                      |
-|-------------|------------------------------------------------|
-| `cardTypes` | Array of reusable card template definitions      |
-| `categories`| Array of category-specific configurations       |
+| Field        | Description                                 |
+|--------------|---------------------------------------------|
+| `cardTypes`  | Array of reusable card template definitions |
+| `categories` | Array of category-specific configurations   |
 
 #### Card Type Definition Fields
 
-| Field       | Description                                      |
-|-------------|------------------------------------------------|
-| `name`      | Unique name for this card type                  |
-| `isCloze`   | Whether this is a cloze deletion card type      |
-| `templates` | Array of card templates (Front/Back format)     |
+| Field                  | Description                                                            |
+|------------------------|------------------------------------------------------------------------|
+| `name`                 | Unique name for this card type                                         |
+| `isCloze`              | Whether this is a cloze deletion card type                             |
+| `templates`            | Array of card templates (Front/Back format for Anki rendering)         |
+| `jsonSchemaProperties` | Fields this card type requires (name → description for AI prompts)     |
+| `exampleOutput`        | JSON example of valid card output (used by AI for formatting guidance) |
 
 #### Card Template Fields
 
-| Field | Description                                      |
-|-------|------------------------------------------------|
-| `name`| Name of this specific template (within the card type) |
-| `front`| Front template using Anki field syntax (e.g., `{{Front}}`) |
-| `back`| Back template using Anki field syntax            |
+| Field   | Description                                                |
+|---------|------------------------------------------------------------|
+| `name`  | Name of this specific template (within the card type)      |
+| `front` | Front template using Anki field syntax (e.g., `{{Front}}`) |
+| `back`  | Back template using Anki field syntax                      |
 
 #### Category Fields
 
-| Field                   | Description                                      |
-|-------------------------|------------------------------------------------|
-| `category`              | Value from the note's `categories` frontmatter  |
-| `priority`              | Higher priority categories are matched first    |
-| `cardTypes`             | Array of card type names to use for this category |
-| `systemPromptAddendum`  | Extra instructions for the AI system prompt     |
-| `assistantPromptAddendum`| Extra instructions appended to the user prompt |
-| `skipBasicTypes`        | _(Optional, default `false`)_ Skips adding default Basic/Cloze types |
+| Field                     | Description                                                          |
+|---------------------------|----------------------------------------------------------------------|
+| `category`                | Value from the note's `categories` frontmatter                       |
+| `priority`                | Higher priority categories are matched first                         |
+| `cardTypes`               | Array of card type names to use for this category                    |
+| `systemPromptAddendum`    | Extra instructions for the AI system prompt                          |
+| `assistantPromptAddendum` | Extra instructions appended to the user prompt                       |
+| `skipBasicTypes`          | _(Optional, default `false`)_ Skips adding default Basic/Cloze types |
 
 Without a config, the tool defaults to simple `Basic` and `Cloze` note types.
 

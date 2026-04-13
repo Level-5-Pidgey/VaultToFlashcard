@@ -30,11 +30,11 @@ public class VaultProcessorTests
 	public void TryParseYamlFrontMatter_ValidFrontMatter_SplitsCorrectly()
 	{
 		var content = """
-			---
-			categories: [test, demo]
-			---
-			Some content here
-			""";
+		              ---
+		              categories: [test, demo]
+		              ---
+		              Some content here
+		              """;
 
 		// Use Item1/Item2 - ValueTuple doesn't preserve named fields at runtime
 		dynamic result = TryParseYamlFrontMatterMethod.Invoke(null, new object[] { content })!;
@@ -61,10 +61,10 @@ public class VaultProcessorTests
 	public void TryParseYamlFrontMatter_EmptyFrontMatter_Works()
 	{
 		var content = """
-			---
-			---
-			Content after empty front matter
-			""";
+		              ---
+		              ---
+		              Content after empty front matter
+		              """;
 
 		// Empty YAML deserializes to null frontMatter - use Item1/Item2
 		dynamic result = TryParseYamlFrontMatterMethod.Invoke(null, new object[] { content })!;
@@ -152,7 +152,8 @@ public class VaultProcessorTests
 	[Test]
 	public void ExtractCategories_NullDict_ReturnsEmptySet()
 	{
-		var result = (List<string>)ExtractCategoriesMethod.Invoke(null, new object[] { new Dictionary<object, object>() })!;
+		var result =
+			(List<string>)ExtractCategoriesMethod.Invoke(null, new object[] { new Dictionary<object, object>() })!;
 
 		Assert.That(result, Is.Empty);
 	}

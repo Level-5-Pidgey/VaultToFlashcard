@@ -16,8 +16,15 @@ public class CategoryPromptRegistry
 			IsCloze = false,
 			Templates = new List<CardTemplateItem>
 			{
-				new CardTemplateItem { Name = "Basic", Front = "{{Front}}", Back = "{{Back}}" }
-			}
+				new() { Name = "Basic", Front = "{{Front}}", Back = "{{Back}}" }
+			},
+			JsonSchemaProperties = new Dictionary<string, string>
+			{
+				["front"] = "The question or prompt for the front of the card",
+				["back"] = "The answer for the back of the card"
+			},
+			ExampleOutput =
+				"""{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}"""
 		},
 		["Cloze"] = new CardTemplateDefinition
 		{
@@ -25,8 +32,15 @@ public class CategoryPromptRegistry
 			IsCloze = true,
 			Templates = new List<CardTemplateItem>
 			{
-				new CardTemplateItem { Name = "Cloze", Front = "{{text}}", Back = "{{text}}" }
-			}
+				new() { Name = "Cloze", Front = "{{text}}", Back = "{{text}}" }
+			},
+			JsonSchemaProperties = new Dictionary<string, string>
+			{
+				["text"] =
+					"Content with cloze deletions using {{c1::answer::hint}} format. Must have at least two clozes."
+			},
+			ExampleOutput =
+				"""{"text": "The three main concurrency primitives in Go are: {{c1::Goroutines::lightweight threads}}, {{c2::Channels::communication mechanism}, and {{c3::Select Statement::multiplexing mechanism}}"}"""
 		}
 	};
 
@@ -36,78 +50,25 @@ public class CategoryPromptRegistry
 		Priority = -1,
 		SystemPromptAddendum = "",
 		AssistantPromptAddendum = "",
-		CardTypeDefinitions = new List<CardTypeDefinition>
-		{
-			new()
-			{
-				ModelName = "Basic",
-				JsonSchemaProperties = new Dictionary<string, string>
-				{
-					["front"] = "The question or prompt for the front of the card",
-					["back"] = "The answer for the back of the card"
-				},
-				ExampleOutput =
-					"""{"front": "When should a Trie be used over a Hash Map?", "back": "When you need efficient prefix-based searching/auto-complete."}"""
-			},
-			new()
-			{
-				ModelName = "Cloze",
-				JsonSchemaProperties = new Dictionary<string, string>
-				{
-					["text"] =
-						"Content with cloze deletions using {{c1::answer::hint}} format. Must have at least two clozes."
-				},
-				ExampleOutput =
-					"""{"text": "The three main concurrency primitives in Go are: {{c1::Goroutines::lightweight threads}}, {{c2::Channels::communication mechanism}}, and {{c3::Select Statement::multiplexing mechanism}}"}"""
-			}
-		}
+		CardTypes = new List<string> { "Basic", "Cloze" }
 	};
 
-	public CategoryPromptRegistry(VaultPromptConfiguration? vaultConfig = null)
+	public CategoryPromptRegistry(VaultPromptConfiguration vaultConfig)
 	{
-		if (vaultConfig != null)
-		{
-			// Load templates from top-level cardTypes
-			foreach (var template in vaultConfig.CardTypes)
-				_cardTemplates[template.Name] = template;
+		// Load templates from top-level cardTypes
+		foreach (var template in vaultConfig.CardTypes)
+			_cardTemplates[template.Name] = template;
 
-			// Load categories
-			_configurations.AddRange(vaultConfig.Categories);
-		}
+		// Load categories
+		_configurations.AddRange(vaultConfig.Categories);
 	}
 
-	public CategoryPromptRegistry(IEnumerable<CategoryPromptConfiguration>? configurations = null)
+	/// <summary>
+	/// Creates a registry with default card types (Basic, Cloze) and no custom categories.
+	/// </summary>
+	public CategoryPromptRegistry()
 	{
-		if (configurations != null)
-		{
-			foreach (var config in configurations)
-			{
-				_configurations.Add(config);
-				// Also register inline card type definitions as templates
-				foreach (var ct in config.CardTypeDefinitions)
-				{
-					if (!_cardTemplates.ContainsKey(ct.ModelName))
-					{
-						var front = ct.Front ?? $"{{{{{ct.JsonSchemaProperties.Keys.First()}}}}}";
-						var back = ct.Back ?? $"{{{{{ct.JsonSchemaProperties.Keys.Last()}}}}}";
-						_cardTemplates[ct.ModelName] = new CardTemplateDefinition
-						{
-							Name = ct.ModelName,
-							IsCloze = ct.IsCloze,
-							Templates = new List<CardTemplateItem>
-							{
-								new CardTemplateItem
-								{
-									Name = ct.ModelName,
-									Front = front,
-									Back = back
-								}
-							}
-						};
-					}
-				}
-			}
-		}
+		// Use default templates from DefaultTemplates
 	}
 
 	public CategoryPromptConfiguration GetDefaultConfiguration()
@@ -129,91 +90,68 @@ public class CategoryPromptRegistry
 		var matched = FindBestMatch(noteCategories);
 		if (matched == null) return DefaultConfiguration;
 
-		// Start with a copy of defaults only if not skipping
+		// Start with defaults (Basic, Cloze) unless skipped
 		var effective = new CategoryPromptConfiguration
 		{
 			Category = matched.Category,
 			Priority = matched.Priority,
 			SystemPromptAddendum = matched.SystemPromptAddendum,
 			AssistantPromptAddendum = matched.AssistantPromptAddendum,
-			CardTypeNames = new List<string>(matched.CardTypeNames),
-			CardTypeDefinitions = matched.SkipBasicTypes
-				? new List<CardTypeDefinition>()
-				: DefaultConfiguration.CardTypeDefinitions.Select(ct => new CardTypeDefinition
-				{
-					ModelName = ct.ModelName,
-					JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
-					ExampleOutput = ct.ExampleOutput
-				}).ToList()
+			SkipBasicTypes = matched.SkipBasicTypes,
+			CardTypes = matched.SkipBasicTypes
+				? new List<string>()
+				: new List<string>(DefaultConfiguration.CardTypes)
 		};
 
-		// Overlay or add category card types (from CardTypeNames references)
-		foreach (var typeName in matched.CardTypeNames)
+		// Add/override with category's card types
+		foreach (var typeName in matched.CardTypes)
+			if (!effective.CardTypes.Contains(typeName, StringComparer.OrdinalIgnoreCase))
+				effective.CardTypes.Add(typeName);
+
+		// If skipBasicTypes but no custom types, revert to defaults
+		if (matched.SkipBasicTypes && effective.CardTypes.Count == 0)
+			effective.CardTypes = new List<string>(DefaultConfiguration.CardTypes);
+
+		return effective;
+	}
+
+	/// <summary>
+	/// Returns effective CardTypeDefinition objects for AI schema generation.
+	/// </summary>
+	/// <param name="noteCategories">Categories to match for configuration.</param>
+	/// <param name="excludeMediaFields">If true, excludes media fields (front, back, image, audio) from JsonSchemaProperties.</param>
+	public IReadOnlyList<CardTypeDefinition> GetEffectiveCardTypes(
+		IReadOnlyCollection<string>? noteCategories,
+		bool excludeMediaFields = false)
+	{
+		var effectiveConfig = GetEffectiveConfiguration(noteCategories);
+		var result = new List<CardTypeDefinition>();
+		var excludeSet = excludeMediaFields ? MediaMerger.MediaFieldNames : null;
+
+		foreach (var typeName in effectiveConfig.CardTypes)
 		{
 			var template = GetCardTemplate(typeName);
 			if (template != null)
 			{
-				var existing = effective.CardTypeDefinitions.FirstOrDefault(ct =>
-					ct.ModelName.Equals(typeName, StringComparison.OrdinalIgnoreCase));
-				if (existing != null)
-				{
-					existing.Front = template.Templates.FirstOrDefault()?.Front;
-					existing.Back = template.Templates.FirstOrDefault()?.Back;
-					existing.IsCloze = template.IsCloze;
-				}
-				else
-				{
-					effective.CardTypeDefinitions.Add(new CardTypeDefinition
-					{
-						ModelName = typeName,
-						Front = template.Templates.FirstOrDefault()?.Front,
-						Back = template.Templates.FirstOrDefault()?.Back,
-						IsCloze = template.IsCloze,
-						JsonSchemaProperties = new Dictionary<string, string>()
-					});
-				}
-			}
-		}
+				var properties = excludeMediaFields
+					? template.JsonSchemaProperties
+						.Where(kvp => !MediaMerger.MediaFieldNames.Contains(kvp.Key, StringComparer.OrdinalIgnoreCase))
+						.ToDictionary(kvp => kvp.Key, kvp => kvp.Value)
+					: template.JsonSchemaProperties;
 
-		// Overlay or add inline category card type definitions
-		foreach (var categoryCardType in matched.CardTypeDefinitions)
-		{
-			var existing = effective.CardTypeDefinitions.FirstOrDefault(ct =>
-				ct.ModelName.Equals(categoryCardType.ModelName, StringComparison.OrdinalIgnoreCase));
-			if (existing != null)
-			{
-				existing.JsonSchemaProperties = new Dictionary<string, string>(categoryCardType.JsonSchemaProperties);
-				existing.ExampleOutput = categoryCardType.ExampleOutput;
-				if (categoryCardType.Front != null) existing.Front = categoryCardType.Front;
-				if (categoryCardType.Back != null) existing.Back = categoryCardType.Back;
-				existing.IsCloze = categoryCardType.IsCloze;
-			}
-			else
-			{
-				effective.CardTypeDefinitions.Add(new CardTypeDefinition
+				result.Add(new CardTypeDefinition
 				{
-					ModelName = categoryCardType.ModelName,
-					JsonSchemaProperties = new Dictionary<string, string>(categoryCardType.JsonSchemaProperties),
-					ExampleOutput = categoryCardType.ExampleOutput,
-					Front = categoryCardType.Front,
-					Back = categoryCardType.Back,
-					IsCloze = categoryCardType.IsCloze
+					ModelName = template.Name,
+					JsonSchemaProperties = new Dictionary<string, string>(properties),
+					ExampleOutput = template.ExampleOutput,
+					Front = template.Templates.FirstOrDefault()?.Front,
+					Back = template.Templates.FirstOrDefault()?.Back,
+					IsCloze = template.IsCloze
 				});
 			}
 		}
 
-		// If skipBasicTypes but no custom types added, revert to defaults
-		if (matched.SkipBasicTypes && effective.CardTypeDefinitions.Count == 0)
-		{
-			effective.CardTypeDefinitions = DefaultConfiguration.CardTypeDefinitions.Select(ct => new CardTypeDefinition
-			{
-				ModelName = ct.ModelName,
-				JsonSchemaProperties = new Dictionary<string, string>(ct.JsonSchemaProperties),
-				ExampleOutput = ct.ExampleOutput
-			}).ToList();
-		}
-
-		return effective;
+		return result;
 	}
 
 	public CategoryPromptConfiguration? FindBestMatch(IReadOnlyCollection<string>? noteCategories)
@@ -230,10 +168,23 @@ public class CategoryPromptRegistry
 			if (config != null) matchedConfigs.Add(config);
 		}
 
-		// Return highest priority match
-		return matchedConfigs
+		// Return highest priority match (clone to prevent mutation of stored config)
+		var matched = matchedConfigs
 			.OrderByDescending(c => c.Priority)
 			.FirstOrDefault();
+
+		if (matched == null) return null;
+
+		// Return a shallow clone to prevent mutation of the stored configuration
+		return new CategoryPromptConfiguration
+		{
+			Category = matched.Category,
+			Priority = matched.Priority,
+			SystemPromptAddendum = matched.SystemPromptAddendum,
+			AssistantPromptAddendum = matched.AssistantPromptAddendum,
+			SkipBasicTypes = matched.SkipBasicTypes,
+			CardTypes = new List<string>(matched.CardTypes)
+		};
 	}
 
 	public IReadOnlyCollection<string> GetAllConfiguredCategoryNames()
@@ -247,45 +198,43 @@ public class CategoryPromptRegistry
 
 		// Add from custom configurations
 		foreach (var config in _configurations)
-		foreach (var cardType in config.CardTypeDefinitions)
-			models.Add(cardType.ModelName);
+		foreach (var cardType in config.CardTypes)
+			models.Add(cardType);
 
 		// Add from default configuration
-		foreach (var cardType in DefaultConfiguration.CardTypeDefinitions) models.Add(cardType.ModelName);
+		foreach (var cardType in DefaultConfiguration.CardTypes) models.Add(cardType);
 
 		return models;
 	}
 
-	public IReadOnlyCollection<(string Name, CardTemplateDefinition? Template)> GetAllRequiredModelsWithTemplates()
+	/// <summary>
+	/// Returns all required model names with their template definitions.
+	/// Only includes templates that exist (custom or default).
+	/// </summary>
+	public IReadOnlyCollection<(string Name, CardTemplateDefinition Template)> GetAllRequiredModelsWithTemplates()
 	{
-		var result = new Dictionary<string, CardTemplateDefinition?>();
+		var result = new Dictionary<string, CardTemplateDefinition>(StringComparer.OrdinalIgnoreCase);
 
-		// Add from custom configurations
+		// Add from custom configurations (templates by name reference)
 		foreach (var config in _configurations)
-		{
-			foreach (var typeName in config.CardTypeNames)
+		foreach (var typeName in config.CardTypes)
+			if (!result.ContainsKey(typeName))
 			{
-				if (!result.ContainsKey(typeName))
-					result[typeName] = GetCardTemplate(typeName);
+				var template = GetCardTemplate(typeName);
+				if (template != null)
+					result[typeName] = template;
 			}
-			foreach (var ct in config.CardTypeDefinitions)
-			{
-				if (!result.ContainsKey(ct.ModelName))
-					result[ct.ModelName] = GetCardTemplate(ct.ModelName);
-			}
-		}
 
 		// Add default templates
 		foreach (var (name, template) in DefaultTemplates)
-		{
 			if (!result.ContainsKey(name))
 				result[name] = template;
-		}
 
 		return result.Select(kvp => (kvp.Key, kvp.Value)).ToList();
 	}
 
-	private static JsonElement BuildProperties(Dictionary<string, string> properties, HashSet<string>? excludeFields = null)
+	private static JsonElement BuildProperties(Dictionary<string, string> properties,
+		HashSet<string>? excludeFields = null)
 	{
 		var propsObj = new Dictionary<string, object>();
 		foreach (var (key, description) in properties)

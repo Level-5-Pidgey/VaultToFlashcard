@@ -155,7 +155,8 @@ public class AnkiConnectClient
 		return new List<string>();
 	}
 
-	public async Task EnsureModelExistsAsync(string modelName, IEnumerable<string> requiredFields, List<CardTemplate>? cardTemplates, bool? isCloze, bool readOnly)
+	public async Task EnsureModelExistsAsync(string modelName, IEnumerable<string> requiredFields,
+		List<CardTemplate>? cardTemplates, bool? isCloze, bool readOnly)
 	{
 		if (readOnly)
 		{
@@ -177,11 +178,12 @@ public class AnkiConnectClient
 		}
 	}
 
-	private async Task CreateModelAsync(string modelName, List<string> fieldNames, List<CardTemplate>? cardTemplates, bool isCloze)
+	private async Task CreateModelAsync(string modelName, List<string> fieldNames, List<CardTemplate>? cardTemplates,
+		bool isCloze)
 	{
 		var templates = cardTemplates ?? new List<CardTemplate>
 		{
-			new CardTemplate("Basic", "{{Front}}", "{{Back}}")
+			new("Basic", "{{Front}}", "{{Back}}")
 		};
 
 		var action = new AnkiAction("createModel", new
@@ -329,9 +331,7 @@ public class AnkiConnectClient
 			if (root.ValueKind != JsonValueKind.Object) return default;
 
 			if (root.TryGetProperty("error", out var errorElement) && errorElement.ValueKind != JsonValueKind.Null)
-			{
 				throw new Exception($"AnkiConnect error: {errorElement.GetString()}");
-			}
 
 			return root.TryGetProperty("result", out var resultElement) ? resultElement.Clone() : default;
 		}
@@ -357,16 +357,19 @@ public record AnkiNote(
 	[property: JsonPropertyName("fields")] object Fields,
 	[property: JsonPropertyName("tags")] IReadOnlyCollection<string> Tags,
 	[property: JsonPropertyName("audio")] List<AnkiMediaEntry>? Audio = null,
-	[property: JsonPropertyName("picture")] List<AnkiMediaEntry>? Picture = null,
+	[property: JsonPropertyName("picture")]
+	List<AnkiMediaEntry>? Picture = null,
 	[property: JsonPropertyName("video")] List<AnkiMediaEntry>? Video = null
 );
 
 public record AnkiMediaEntry(
-	[property: JsonPropertyName("filename")] string Filename,
+	[property: JsonPropertyName("filename")]
+	string Filename,
 	[property: JsonPropertyName("data")] string? Data,
 	[property: JsonPropertyName("url")] string? Url,
 	[property: JsonPropertyName("path")] string? Path,
-	[property: JsonPropertyName("skipHash")] string? SkipHash,
+	[property: JsonPropertyName("skipHash")]
+	string? SkipHash,
 	[property: JsonPropertyName("fields")] string[] Fields
 );
 

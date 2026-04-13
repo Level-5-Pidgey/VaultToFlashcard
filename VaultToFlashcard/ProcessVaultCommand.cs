@@ -41,10 +41,8 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 			try
 			{
 				var json = await File.ReadAllTextAsync(settings.ConfigPath);
-
-				// Try new format first (VaultPromptConfiguration with cardTypes + categories)
 				var vaultConfig = JsonSerializer.Deserialize<VaultPromptConfiguration>(json);
-				if (vaultConfig != null && vaultConfig.CardTypes.Count > 0)
+				if (vaultConfig != null)
 				{
 					promptRegistry = new CategoryPromptRegistry(vaultConfig);
 					AnsiConsole.MarkupLine(
@@ -52,14 +50,8 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 				}
 				else
 				{
-					// Fall back to old format (list of CategoryPromptConfiguration)
-					var configs = JsonSerializer.Deserialize<List<CategoryPromptConfiguration>>(json);
-					if (configs != null)
-					{
-						promptRegistry = new CategoryPromptRegistry(configs);
-						AnsiConsole.MarkupLine(
-							$"[yellow]Loaded {configs.Count} categories (legacy format - consider migrating to new format)[/]");
-					}
+					AnsiConsole.MarkupLine($"[red]Error: Invalid config format[/]");
+					return -1;
 				}
 			}
 			catch (Exception ex)

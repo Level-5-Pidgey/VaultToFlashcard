@@ -27,7 +27,7 @@ public class VaultProcessor(
 	ILogger? logger = null)
 {
 	private readonly CategoryAnalyzer CategoryAnalyzer = new();
-	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry((IEnumerable<CategoryPromptConfiguration>?)null);
+	private readonly CategoryPromptRegistry PromptRegistry = promptRegistry ?? new CategoryPromptRegistry();
 	private readonly MediaExtractor MediaExtractor = new();
 	private readonly MediaMerger MediaMerger = new();
 	private ConcurrentDictionary<string, CacheEntry> Cache = new();
@@ -234,55 +234,15 @@ public class VaultProcessor(
 		var requiredModels = PromptRegistry.GetAllRequiredModelsWithTemplates();
 
 		foreach (var (modelName, templateDefinition) in requiredModels)
-		{
-			// Find the card type definition for field names
-			CardTypeDefinition? cardType = null;
-
-			// Check custom configurations
-			foreach (var config in PromptRegistry.GetAllConfiguredCategoryNames())
+			if (templateDefinition != null)
 			{
-				var matchedConfig = PromptRegistry.FindBestMatch(new[] { config });
-				if (matchedConfig != null)
-				{
-					cardType = matchedConfig.CardTypeDefinitions.FirstOrDefault(ct => ct.ModelName == modelName);
-					if (cardType != null) break;
-				}
+				var requiredFields = templateDefinition.JsonSchemaProperties.Keys.Append("Source").ToList();
+				var cardTemplates = templateDefinition.Templates.Select(t =>
+					new CardTemplate(t.Name, t.Front, t.Back)).ToList();
+
+				await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, cardTemplates,
+					templateDefinition.IsCloze, readOnly);
 			}
-
-			// If not found, check default config
-			if (cardType == null)
-			{
-				var defaultConfig = PromptRegistry.GetDefaultConfiguration();
-				cardType = defaultConfig.CardTypeDefinitions.FirstOrDefault(ct => ct.ModelName == modelName);
-			}
-
-			if (cardType != null)
-			{
-				var requiredFields = cardType.JsonSchemaProperties.Keys.Append("Source").ToList();
-
-				// Build card templates from template definition
-				List<CardTemplate>? cardTemplates = null;
-				bool? isCloze = null;
-
-				if (templateDefinition != null)
-				{
-					isCloze = templateDefinition.IsCloze;
-					cardTemplates = templateDefinition.Templates.Select(t =>
-						new CardTemplate(t.Name, t.Front, t.Back)).ToList();
-				}
-				else if (cardType.Front != null && cardType.Back != null)
-				{
-					// Fall back to inline definition
-					isCloze = cardType.IsCloze;
-					cardTemplates = new List<CardTemplate>
-					{
-						new CardTemplate(modelName, cardType.Front, cardType.Back)
-					};
-				}
-
-				await ankiClient.EnsureModelExistsAsync(modelName, requiredFields, cardTemplates, isCloze, readOnly);
-			}
-		}
 	}
 
 	private async Task<int> CleanUpOrphanedNotesAsync(ConcurrentBag<long> validNoteIds, ProgressTask task)
@@ -439,7 +399,7 @@ public class VaultProcessor(
 			var noteCategories = ExtractCategories(frontMatter);
 
 			var promptConfig = PromptRegistry.GetEffectiveConfiguration(noteCategories);
-			var cardTypes = promptConfig.CardTypeDefinitions.Select(x => x.ModelName);
+			var cardTypes = promptConfig.CardTypes;
 			var tree = new Tree(
 				$"[blue]{Markup.Escape(relativePath)}[/] [Grey70]({Markup.Escape(string.Join(", ", cardTypes))})[/]");
 
@@ -631,6 +591,7 @@ public class VaultProcessor(
 						await ankiClient.UnsuspendCardsAsync(cardIds);
 						Cache[cacheKey] = cachedEntry with { IsSuspended = false };
 					}
+
 					summary.NotesUnsuspended++;
 				}
 
@@ -688,6 +649,7 @@ public class VaultProcessor(
 					await ankiClient.SuspendCardsAsync(cardIds);
 					Cache[cacheKey] = cachedEntry with { IsSuspended = true };
 				}
+
 				summary.NotesSuspended++;
 			}
 
@@ -725,7 +687,21 @@ public class VaultProcessor(
 		var assistantPrompt = new StringBuilder();
 
 		// Use configuration if available, otherwise use default
-		var cardTypes = config?.CardTypeDefinitions ?? PromptRegistry.GetDefaultConfiguration().CardTypeDefinitions;
+		var cardTypes = config != null
+			? PromptRegistry.GetEffectiveCardTypes(new[] { config.Category })
+			: PromptRegistry.GetDefaultConfiguration().CardTypes.Select(name =>
+			{
+				var template = PromptRegistry.GetCardTemplate(name);
+				return new CardTypeDefinition
+				{
+					ModelName = name,
+					JsonSchemaProperties = template?.JsonSchemaProperties ?? new Dictionary<string, string>(),
+					ExampleOutput = template?.ExampleOutput ?? "",
+					Front = template?.Templates.FirstOrDefault()?.Front,
+					Back = template?.Templates.FirstOrDefault()?.Back,
+					IsCloze = template?.IsCloze ?? false
+				};
+			}).ToList();
 
 		if (cardTypes.Any(x => x.ModelName == "Cloze"))
 		{
@@ -737,17 +713,12 @@ public class VaultProcessor(
 		// Build examples from configured card types
 		var configuredCardTypeDefs = cardTypes.Where(cardType => !string.IsNullOrEmpty(cardType.ExampleOutput));
 		foreach (var cardType in configuredCardTypeDefs)
-		{
 			assistantPrompt.AppendLine($"- {cardType.ModelName}: [{cardType.ExampleOutput}]");
-		}
 
 		// Add category-specific addendums
 		if (config != null && !string.IsNullOrEmpty(config.AssistantPromptAddendum))
 		{
-			if (assistantPrompt.Length > 0)
-			{
-				assistantPrompt.AppendLine();
-			}
+			if (assistantPrompt.Length > 0) assistantPrompt.AppendLine();
 
 			assistantPrompt.AppendLine(config.AssistantPromptAddendum);
 		}
@@ -768,10 +739,7 @@ public class VaultProcessor(
 		// Add system prompt addendum from config
 		if (config != null && !string.IsNullOrEmpty(config.SystemPromptAddendum))
 		{
-			if (systemPrompt.Length > 0)
-			{
-				systemPrompt.AppendLine();
-			}
+			if (systemPrompt.Length > 0) systemPrompt.AppendLine();
 
 			systemPrompt.AppendLine(config.SystemPromptAddendum);
 		}
@@ -782,15 +750,11 @@ public class VaultProcessor(
 		};
 
 		if (config != null)
-		{
 			messages.Add(new ChatMessage(ChatRole.User,
 				$"Context: This note has the following categories: '{config.Category}'."));
-		}
 
 		if (!string.Equals(Path.GetFileNameWithoutExtension(relativePath), header, StringComparison.OrdinalIgnoreCase))
-		{
 			messages.Add(new ChatMessage(ChatRole.User, $"Section Name: {header}"));
-		}
 
 		messages.Add(new ChatMessage(ChatRole.Assistant, assistantPrompt.ToString()));
 		messages.Add(new ChatMessage(ChatRole.User,
@@ -820,7 +784,7 @@ public class VaultProcessor(
 		var mediaItems = extracted.Media;
 
 		// Identify all-media card types (these skip AI inference)
-		var allCardTypes = promptConfig.CardTypeDefinitions;
+		var allCardTypes = PromptRegistry.GetEffectiveCardTypes(new[] { promptConfig.Category });
 		var allMediaCardTypes = allCardTypes
 			.Where(MediaMerger.IsAllMediaCardType)
 			.ToList();
@@ -857,22 +821,11 @@ public class VaultProcessor(
 		}
 
 		// If all card types are all-media and we have cards, return them directly
-		if (mixedCardTypes.Count == 0 && mediaOnlyCards.Count > 0)
-		{
-			return mediaOnlyCards;
-		}
+		if (mixedCardTypes.Count == 0 && mediaOnlyCards.Count > 0) return mediaOnlyCards;
 
-		// Create filtered config with only mixed card types for prompt generation
-		var mixedConfig = new CategoryPromptConfiguration
-		{
-			Category = promptConfig.Category,
-			Priority = promptConfig.Priority,
-			SystemPromptAddendum = promptConfig.SystemPromptAddendum,
-			AssistantPromptAddendum = promptConfig.AssistantPromptAddendum,
-			SkipBasicTypes = promptConfig.SkipBasicTypes,
-			CardTypeDefinitions = mixedCardTypes
-		};
-		List<ChatMessage> promptMessages = GetPromptMessages(cleanedContent, mixedConfig, relativePath, header).ToList();
+		// Get prompt messages - config with Category is enough since GetPromptMessages now gets card types from registry
+		var promptMessages =
+			GetPromptMessages(cleanedContent, promptConfig, relativePath, header).ToList();
 
 		// Build grouped JSON schema from all configured card types
 		var groupedSchema = CategoryPromptRegistry.BuildGroupedJsonSchema(mixedCardTypes);
@@ -880,7 +833,8 @@ public class VaultProcessor(
 
 		var options = new ChatOptions
 		{
-			ResponseFormat = ChatResponseFormat.ForJsonSchema(groupedSchema, mixedCardTypes.First().ModelName, schemaDescription),
+			ResponseFormat =
+				ChatResponseFormat.ForJsonSchema(groupedSchema, mixedCardTypes.First().ModelName, schemaDescription),
 			Temperature = 0.15f
 		};
 
@@ -931,7 +885,8 @@ public class VaultProcessor(
 
 						var fields = new Dictionary<string, string>();
 						foreach (var prop in cardType.JsonSchemaProperties.Keys)
-							if (card.TryGetProperty(prop, out var propValue) && propValue.ValueKind == JsonValueKind.String)
+							if (card.TryGetProperty(prop, out var propValue) &&
+							    propValue.ValueKind == JsonValueKind.String)
 								fields[prop] = propValue.GetString() ?? "";
 
 						allCards.Add(new DynamicFlashcard(typeName, fields,
@@ -954,7 +909,8 @@ public class VaultProcessor(
 					// Append retry warning to prompt messages and retry once
 					promptMessages = promptMessages.Take(promptMessages.Count - 1).ToList(); // remove last user message
 					promptMessages.Add(new ChatMessage(ChatRole.User,
-						"Warning: previous response had invalid cards. Ensure each card only contains fields that match the type declared in the response. Discard any field not belonging to the declared card type.\n\nContent to convert:\n" + cleanedContent + "\n\nTask: Create atomic Anki flashcards from this content."));
+						"Warning: previous response had invalid cards. Ensure each card only contains fields that match the type declared in the response. Discard any field not belonging to the declared card type.\n\nContent to convert:\n" +
+						cleanedContent + "\n\nTask: Create atomic Anki flashcards from this content."));
 					continue; // retry
 				}
 
@@ -966,10 +922,7 @@ public class VaultProcessor(
 					return Array.Empty<DynamicFlashcard>();
 				}
 
-				if (mediaItems.Count > 0)
-				{
-					MediaMerger.Merge(allCards, mediaItems);
-				}
+				if (mediaItems.Count > 0) MediaMerger.Merge(allCards, mediaItems);
 
 				allCards.AddRange(mediaOnlyCards);
 

@@ -438,7 +438,7 @@ public class VaultProcessor(
 				var chunkContext = new ChunkProcessingContext(header, content, cacheKey, contentHash);
 
 				// File was in Anki (cached) and now study=false -> suspend
-				if (cachedEntry != null && !shouldStudy)
+				if (cachedEntry != null && !shouldStudy && !cachedEntry.IsSuspendedState)
 				{
 					await HandleSuspendStateChangeAsync(cachedEntry, fileContext, chunkContext, tree, summary,
 						allValidNoteIds, false);
@@ -447,6 +447,9 @@ public class VaultProcessor(
 
 				// File was never in Anki and study=false
 				if (cachedEntry == null && !shouldStudy) continue;
+
+				// File was in Anki, study=false, and already suspended - nothing to do
+				if (cachedEntry != null && !shouldStudy && cachedEntry.IsSuspendedState) continue;
 
 				// At this point, shouldStudy = true
 				// Handle suspended notes being re-activated -> unsuspend

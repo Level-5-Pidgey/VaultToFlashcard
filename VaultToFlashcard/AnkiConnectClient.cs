@@ -113,7 +113,8 @@ public class AnkiConnectClient
 	public async Task EnsureFieldsExist(string modelName, IEnumerable<string> requiredFields)
 	{
 		var modelFieldNames = await GetModelFieldNamesAsync(modelName);
-		var missingFields = requiredFields.Except(modelFieldNames).ToList();
+		var modelFieldNamesLower = modelFieldNames.Select(f => f.ToLowerInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+		var missingFields = requiredFields.Where(f => !modelFieldNamesLower.Contains(f.ToLowerInvariant())).ToList();
 
 		foreach (var field in missingFields)
 		{
@@ -193,7 +194,7 @@ public class AnkiConnectClient
 			css,
 			inOrderFields = fieldNames,
 			isCloze,
-			cardTemplates = templates.Select(t => new { t.Name, t.Front, t.Back }).ToArray()
+			cardTemplates = templates
 		});
 		await PostAsync(action);
 		AnsiConsole.MarkupLine(

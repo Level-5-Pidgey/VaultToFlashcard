@@ -6,7 +6,7 @@ public class MediaMerger
 	{
 		"audio", "sound",
 		"image", "picture",
-		"video"
+		"video", "visualization"
 	};
 
 	private static readonly HashSet<string> AudioFieldNames = new(StringComparer.OrdinalIgnoreCase)

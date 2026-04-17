@@ -126,7 +126,7 @@ public class VaultProcessor(
 
 	public async Task ProcessVault(string vaultPath, string? assetsPath)
 	{
-		AnsiConsole.MarkupLine($"Starting vault processing at: [blue]{vaultPath}[/]");
+		AnsiConsole.MarkupLine($"Starting vault processing at: [blue]{Markup.Escape(vaultPath)}[/]");
 		var cachePath = Path.Combine(vaultPath, CacheFileName);
 
 		if (File.Exists(cachePath))
@@ -563,7 +563,7 @@ public class VaultProcessor(
 		}
 		catch (Exception ex)
 		{
-			AnsiConsole.MarkupLine($"[red]Error processing file {filePath}[/]");
+			AnsiConsole.MarkupLine($"[red]Error processing file {Markup.Escape(filePath)}[/]");
 			AnsiConsole.WriteException(ex);
 			return (null, null, null);
 		}

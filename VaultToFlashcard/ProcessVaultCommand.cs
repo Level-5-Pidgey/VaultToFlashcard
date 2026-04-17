@@ -34,7 +34,7 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 		{
 			if (!File.Exists(settings.ConfigPath))
 			{
-				AnsiConsole.MarkupLine($"[red]Error: Config file not found at '{settings.ConfigPath}'[/]");
+				AnsiConsole.MarkupLine($"[red]Error: Config file not found at '{Markup.Escape(settings.ConfigPath)}'[/]");
 				return -1;
 			}
 
@@ -46,7 +46,7 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 				{
 					promptRegistry = new CategoryPromptRegistry(vaultConfig);
 					AnsiConsole.MarkupLine(
-						$"[green]Loaded {vaultConfig.Categories.Count} categories and {vaultConfig.CardTypes.Count} card types from '{settings.ConfigPath}'[/]");
+						$"[green]Loaded {vaultConfig.Categories.Count} categories and {vaultConfig.CardTypes.Count} card types from '{Markup.Escape(settings.ConfigPath)}'[/]");
 				}
 				else
 				{
@@ -56,7 +56,7 @@ public class ProcessVaultCommand : AsyncCommand<CommandSettings>
 			}
 			catch (Exception ex)
 			{
-				AnsiConsole.MarkupLine($"[red]Error loading config file: {ex.Message}[/]");
+				AnsiConsole.MarkupLine($"[red]Error loading config file: {Markup.Escape(ex.Message)}[/]");
 				return -1;
 			}
 		}

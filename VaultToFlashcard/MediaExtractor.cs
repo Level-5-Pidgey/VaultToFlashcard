@@ -56,7 +56,7 @@ public partial class MediaExtractor
 			if (filePath == null)
 			{
 				// File not found — skip, but still strip from content
-				AnsiConsole.MarkupLine($"[yellow]Warning: Media file not found: {filename}[/]");
+				AnsiConsole.MarkupLine($"[yellow]Warning: Media file not found: {Markup.Escape(filename)}[/]");
 				continue;
 			}
 

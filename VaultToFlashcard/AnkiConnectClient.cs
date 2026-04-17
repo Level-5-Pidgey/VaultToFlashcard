@@ -119,18 +119,18 @@ public class AnkiConnectClient
 		foreach (var field in missingFields)
 		{
 			AnsiConsole.MarkupLine(
-				$"[yellow]Field '{field}' not found in model '{modelName}'. Attempting to add it...[/]");
+				$"[yellow]Field '{Markup.Escape(field)}' not found in model '{Markup.Escape(modelName)}'. Attempting to add it...[/]");
 			try
 			{
 				var action = new AnkiAction("modelFieldAdd", new { modelName, fieldName = field });
 				await PostAsync(action);
-				AnsiConsole.MarkupLine($"[green]Successfully added field '{field}' to model '{modelName}'.[/]");
+				AnsiConsole.MarkupLine($"[green]Successfully added field '{Markup.Escape(field)}' to model '{Markup.Escape(modelName)}'.[/]");
 			}
 			catch (Exception ex)
 			{
 				AnsiConsole.MarkupLine(
-					$"[red]Failed to add field '{field}' to model '{modelName}'. Please add it manually via Anki's 'Tools > Manage Note Types' menu.[/]");
-				AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+					$"[red]Failed to add field '{Markup.Escape(field)}' to model '{Markup.Escape(modelName)}'. Please add it manually via Anki's 'Tools > Manage Note Types' menu.[/]");
+				AnsiConsole.MarkupLine($"[red]Error: {Markup.Escape(ex.Message)}[/]");
 				throw new Exception(
 					$"Failed to automatically add required field '{field}' to Anki model '{modelName}'. Please add it manually and restart the process.",
 					ex);
@@ -162,7 +162,7 @@ public class AnkiConnectClient
 		if (readOnly)
 		{
 			AnsiConsole.MarkupLine(
-				$"[yellow][[Read-Only]][/] Would ensure model '{modelName}' exists with fields: {string.Join(", ", requiredFields)}.");
+				$"[yellow][[Read-Only]][/] Would ensure model '{Markup.Escape(modelName)}' exists with fields: {Markup.Escape(string.Join(", ", requiredFields))}.");
 			return;
 		}
 
@@ -170,7 +170,7 @@ public class AnkiConnectClient
 
 		if (!existingModels.Contains(modelName))
 		{
-			AnsiConsole.MarkupLine($"[yellow]Model '{modelName}' not found. Creating it...[/]");
+			AnsiConsole.MarkupLine($"[yellow]Model '{Markup.Escape(modelName)}' not found. Creating it...[/]");
 			await CreateModelAsync(modelName, requiredFields.ToList(), cardTemplates, css ?? "", isCloze ?? false);
 		}
 		else
@@ -198,7 +198,7 @@ public class AnkiConnectClient
 		});
 		await PostAsync(action);
 		AnsiConsole.MarkupLine(
-			$"[green]Successfully created model '{modelName}' with fields: {string.Join(", ", fieldNames)}.[/]");
+			$"[green]Successfully created model '{Markup.Escape(modelName)}' with fields: {Markup.Escape(string.Join(", ", fieldNames))}.[/]");
 	}
 
 	public async Task<IReadOnlyCollection<AnkiNoteInfo>> NotesInfoAsync(IReadOnlyCollection<long> noteIds)
